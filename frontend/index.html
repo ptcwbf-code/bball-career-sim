@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🏀 BBALL CAREER SIMULATOR v3</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        bg: { DEFAULT:'#0a0a0f', card:'#14141d', hover:'#1b1b28', border:'#232336' },
+        accent: { DEFAULT:'#f59e0b', hover:'#fbbf24', dim:'#b45309' },
+        cyber: { DEFAULT:'#06b6d4', hover:'#22d3ee' },
+        good: '#34d399', bad: '#f87171', warn: '#fbbf24',
+        muted: '#8b8ba3', faint: '#55556b',
+      }
+    }
+  }
+}
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="sticky top-0 z-50 bg-bg/90 backdrop-blur border-b border-bg-border">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+    <div class="flex items-center gap-2.5">
+      <span class="text-2xl">🏀</span>
+      <div>
+        <h1 class="text-base font-800 font-black text-white leading-none">BBALL CAREER <span class="text-accent">SIM</span></h1>
+        <p class="text-[11px] text-faint mono mt-0.5" id="hdr-sub">v3.0 · Deep Strategy RPG</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3" id="hdr-player" style="display:none">
+      <div class="text-right">
+        <div class="text-sm font-bold text-white leading-tight" id="hdr-name">—</div>
+        <div class="text-[11px] text-muted" id="hdr-team">—</div>
+      </div>
+      <div class="flex gap-1.5 text-[11px]" id="hdr-chips"></div>
+    </div>
+  </div>
+</header>
+
+<!-- TAB NAV -->
+<nav class="border-b border-bg-border bg-bg/60 backdrop-blur sticky top-[57px] z-40 overflow-x-auto">
+  <div class="max-w-7xl mx-auto px-2 flex flex-nowrap" id="tab-nav"></div>
+</nav>
+
+<!-- MAIN -->
+<main class="max-w-6xl mx-auto px-4 py-5" id="main"></main>
+
+<!-- TOAST -->
+<div class="toast space-y-2" id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "bball-career-sim-backend",
+  "version": "1.0.0",
+  "description": "BBall Career Simulator backend (Express + SQLite)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
