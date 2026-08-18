@@ -1678,13 +1678,14 @@ function lockerRoomAction(playerId, teammateId) {
 // (rebuilders send a win-now veteran to a contender for youth). Moves are logged
 // to career_progress as 'league' events so they show up in the League tab + timeline.
 function pickTeamByStrength(playerId, overall) {
+  // Weighted random: stronger teams more likely, but not guaranteed.
+  // Also favor teams that need the player's position.
   const opts = ALL_TEAM_IDS.map(tid => {
     const s = teamStrength(playerId, tid);
-    const appeal = s + randRange(-6, 6) + (overall - 70) * 0.3;
-    return { tid, appeal };
+    const appeal = s * randRange(0.8, 1.2) + (overall - 70) * 0.3;
+    return { tid, weight: Math.max(1, appeal) };
   });
-  opts.sort((a, b) => b.appeal - a.appeal);
-  return opts[0].tid;
+  return weightedChoice(Object.fromEntries(opts.map(o => [o.tid, o.weight])));
 }
 
 function advanceLeagueMarket(playerId) {
@@ -1776,7 +1777,7 @@ function maybeDevelop(playerId) {
 function maybeCareerEvent(playerId) {
   // Story mode surfaces more of the off-court narrative.
   const mode = getLeagueState(playerId).game_mode || 'classic';
-  if (Math.random() >= (mode === 'story' ? 0.05 : 0.02)) return null;
+  if (Math.random() >= (mode === 'story' ? 0.10 : 0.05)) return null;
   const state = getLeagueState(playerId);
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   const candidates = CAREER_EVENTS.filter(e => !e.min_experience || (p.experience || 0) >= e.min_experience);
@@ -1856,11 +1857,11 @@ function maybePassiveTrade(playerId) {
   const isBadTeam = winPct < 0.4;
   const overCap = teamSalary(playerId, p.team_id) > TEAM_SALARY_CAP * 1.1;
   if (!isBadTeam && !overCap) return null;
-  let chance = 0.15;
-  if (isBadTeam) chance += 0.2;
-  if (overCap) chance += 0.15;
-  chance -= (overall - 70) * 0.01; // franchise stars are harder to dump
-  chance = clamp(chance, 0.03, 0.6);
+  let chance = 0.06;
+  if (isBadTeam) chance += 0.12;
+  if (overCap) chance += 0.08;
+  chance -= (overall - 75) * 0.004; // stars are harder to dump
+  chance = clamp(chance, 0.02, 0.25);
   if (Math.random() >= chance) return null;
   const dest = pickTeamByStrength(playerId, overall);
   if (dest === p.team_id) return null;
@@ -1889,14 +1890,17 @@ function maybeAllStarWeekend(playerId) {
 // All-Star weekend events — the player picks specific moves/spots; harder ones
 // pay more but are less likely to land (gated by body/physical attributes).
 const DUNK_ACTIONS = [
-  { id: 'windmill', label: 'Windmill', icon: '🌪️', desc: 'A clean one-handed windmill.', difficulty: 1.1, attr: 'vertical_jump' },
-  { id: '360', label: '360 Spin', icon: '🌀', desc: 'A full spin in the air before the throwdown.', difficulty: 1.6, attr: 'vertical_jump' },
-  { id: 'poster', label: 'Jump Over a Person', icon: '🧍', desc: 'Catch a lob over a crouching mascot.', difficulty: 2.4, attr: 'finishing' },
+  { id: 'windmill', label: { en: 'Windmill', zh: '大风车' }, icon: '🌪️', desc: { en: 'A clean one-handed windmill.', zh: '一记干净的大风车扣篮。' }, difficulty: 1.3, attr: 'vertical_jump' },
+  { id: '360', label: { en: '360 Spin', zh: '360转身' }, icon: '🌀', desc: { en: 'A full spin in the air before the throwdown.', zh: '空中转体一圈再扣。' }, difficulty: 2.0, attr: 'vertical_jump' },
+  { id: 'tomahawk', label: { en: 'Tomahawk', zh: '战斧劈扣' }, icon: '🪓', desc: { en: 'An aggressive one-handed hammer.', zh: '一记凶狠的单臂劈扣。' }, difficulty: 1.5, attr: 'strength' },
+  { id: 'between_legs', label: { en: 'Between the Legs', zh: '胯下换手' }, icon: '🦵', desc: { en: 'Switch hands under the leg mid-air.', zh: '空中胯下换手再扣。' }, difficulty: 2.5, attr: 'vertical_jump' },
+  { id: 'poster', label: { en: 'Jump Over a Person', zh: '跨人暴扣' }, icon: '🧍', desc: { en: 'Catch a lob over a crouching mascot.', zh: '越过一个蹲着的人接球扣篮。' }, difficulty: 3.2, attr: 'finishing' },
 ];
 const THREE_SPOTS = [
-  { id: 'corner', label: 'Corner', icon: '📐', desc: 'The short corner three.', difficulty: 0.8 },
-  { id: 'wing', label: 'Wing', icon: '🎯', desc: 'The 45-degree wing.', difficulty: 1.0 },
-  { id: 'top', label: 'Top of the Key', icon: '🏹', desc: 'The deep arc three.', difficulty: 1.3 },
+  { id: 'corner', label: { en: 'Corner', zh: '底角' }, icon: '📐', desc: { en: 'The short corner three.', zh: '底角三分。' }, difficulty: 1.1 },
+  { id: 'wing', label: { en: 'Wing', zh: '侧翼' }, icon: '🎯', desc: { en: 'The 45-degree wing.', zh: '侧翼45度三分。' }, difficulty: 1.4 },
+  { id: 'top', label: { en: 'Top of the Key', zh: '弧顶' }, icon: '🏹', desc: { en: 'The deep arc three.', zh: '弧顶远距离三分。' }, difficulty: 1.8 },
+  { id: 'logo', label: { en: 'Logo Range', zh: 'Logo 三分' }, icon: '💥', desc: { en: 'Way downtown — the ultimate heat check.', zh: '超远距离——终极手感检验。' }, difficulty: 2.5 },
 ];
 
 function resolveAllStarWeekend(playerId, choice, action) {
@@ -1907,7 +1911,7 @@ function resolveAllStarWeekend(playerId, choice, action) {
   if (choice === 'dunk') {
     const act = DUNK_ACTIONS.find(a => a.id === action) || DUNK_ACTIONS[0];
     const attr = p[act.attr] ?? 50;
-    const successProb = clamp(attr / 100 * (1.4 - act.difficulty * 0.3), 0.15, 0.92);
+    const successProb = clamp(attr / 140 - act.difficulty * 0.15 + 0.35, 0.08, 0.78);
     const success = Math.random() < successProb;
     const clout = success ? Math.max(2, Math.round(act.difficulty * 6)) : 1;
     db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+?), injury_risk=MIN(100,injury_risk+?) WHERE id=?')
@@ -1918,7 +1922,9 @@ function resolveAllStarWeekend(playerId, choice, action) {
   } else if (choice === 'three') {
     const spot = THREE_SPOTS.find(s => s.id === action) || THREE_SPOTS[0];
     const tp = p.catch_shoot_3pt ?? 35;
-    const makeProb = clamp(tp / 100 / spot.difficulty, 0.1, 0.9);
+    // NBA 3-pt contest realism: elite shooters ~40% from easy spots, ~15-20% from deep.
+    const base = tp / 200 + 0.08;
+    const makeProb = clamp(base / Math.pow(spot.difficulty, 1.3), 0.04, 0.48);
     let made = 0;
     for (let i = 0; i < 5; i++) if (Math.random() < makeProb) made++;
     const clout = clamp(Math.round(made * 1.5), 0, 8);

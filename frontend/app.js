@@ -110,11 +110,11 @@ function renderHeader() {
   const pending = pendingDecisions();
   if (pending.length) chips.push(`<button class="px-2 py-1 rounded-full bg-bad/15 text-bad border border-bad/30 font-semibold" onclick="openDecisions()" title="Pending decisions">📋 ${pending.length}</button>`);
   chips.push(`<span class="px-2 py-1 rounded-full bg-accent/15 text-accent border border-accent/30" title="${esc(pi.desc)}">${pi.icon} ${pi.label}</span>`);
-  if (S.player.injury_status) chips.push(`<span class="px-2 py-1 rounded-full bg-bad/15 text-bad border border-bad/30">🏥 ${S.player.injury_status}</span>`);
-  if (S.player.hot_streak>0) chips.push(`<span class="px-2 py-1 rounded-full bg-accent/15 text-accent border border-accent/30">🔥 Hot</span>`);
-  if (S.player.cold_streak<0) chips.push(`<span class="px-2 py-1 rounded-full bg-cyber/15 text-cyber border border-cyber/30">❄️ Cold</span>`);
-  chips.push(`<span class="px-2 py-1 rounded-full bg-bg-hover text-muted border border-bg-border" title="Fatigue">⚡ ${Math.round(S.player.fatigue)}%</span>`);
-  chips.push(`<span class="px-2 py-1 rounded-full bg-bg-hover text-muted border border-bg-border" title="Morale">😊 ${S.player.morale}</span>`);
+  if (S.player.injury_status) chips.push(`<span class="px-2 py-1 rounded-full bg-bad/15 text-bad border border-bad/30">🏥 ${t(S.player.injury_status)}</span>`);
+  if (S.player.hot_streak>0) chips.push(`<span class="px-2 py-1 rounded-full bg-accent/15 text-accent border border-accent/30">🔥 ${t('Hot')}</span>`);
+  if (S.player.cold_streak<0) chips.push(`<span class="px-2 py-1 rounded-full bg-cyber/15 text-cyber border border-cyber/30">❄️ ${t('Cold')}</span>`);
+  chips.push(`<span class="px-2 py-1 rounded-full bg-bg-hover text-muted border border-bg-border" title="${t('Fatigue')}">⚡ ${Math.round(S.player.fatigue)}%</span>`);
+  chips.push(`<span class="px-2 py-1 rounded-full bg-bg-hover text-muted border border-bg-border" title="${t('Morale')}">😊 ${S.player.morale}</span>`);
   $('#hdr-chips').innerHTML = chips.join('');
 }
 
@@ -168,7 +168,7 @@ async function refreshSeason() { try { S.season = S.playerId ? await api(`/seaso
 function phaseInfo() {
   const phase = S.season?.current_phase||'regular_season';
   const games = S.season?.games_played_in_season||0;
-  if (phase === 'offseason') return { phase, label:'Offseason', icon:'🌅', desc:'Train once, then advance to the next season.' };
+  if (phase === 'offseason') return { phase, label:t('Offseason'), icon:'🌅', desc:t('Train once, then advance to the next season.') };
   if (phase === 'playoffs') {
     const rn = ['', 'First Round', 'Conf Semis', 'Conf Finals', 'NBA Finals'];
     return { phase, label:'Playoffs', icon:'🏆', desc:`${rn[S.season?.playoff_round]||'Playoffs'} — series ${S.season?.series_wins||0}-${S.season?.series_losses||0}.` };
@@ -766,7 +766,7 @@ async function renderDashboard(m) {
   const injCard = (p.injury_status && p.injury_games_remaining > 0 && !p.injury_treatment) ? `
       <div class="card p-5 border-bad/40 bg-bad/5">
         <h3 class="text-sm font-semibold text-bad mb-2">🏥 Injury Treatment</h3>
-        <p class="text-xs text-muted mb-3">${p.injury_status} — out ${p.injury_games_remaining} games. Choose how to handle it.</p>
+        <p class="text-xs text-muted mb-3">${t(p.injury_status)} — out ${p.injury_games_remaining} games. Choose how to handle it.</p>
         <div class="flex gap-2 flex-wrap">
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="applyTreatment('rest')">🛌 Rest (full recovery)</button>
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="applyTreatment('surgery')">🔪 Surgery (faster, −$1M)</button>
@@ -797,14 +797,14 @@ async function renderDashboard(m) {
       <div class="card p-5">
         <h3 class="text-sm font-semibold text-gray-300 mb-3">🏀 ${t('Team Overview')} — ${esc(tm.name)}</h3>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <div><div class="text-xs text-muted">${t('Overall')}</div><div class="font-bold text-white">${tm.ovr} <span class="text-[10px] text-muted">(${p.team_tier||''})</span></div></div>
+          <div><div class="text-xs text-muted">${t('Overall')}</div><div class="font-bold text-white">${tm.ovr} <span class="text-[10px] text-muted">(${t(p.team_tier||'')})</span></div></div>
           <div><div class="text-xs text-muted">${t('Offense')}</div><div class="font-bold text-accent">${tm.off}</div></div>
           <div><div class="text-xs text-muted">${t('Defense')}</div><div class="font-bold text-cyber">${tm.def}</div></div>
           <div><div class="text-xs text-muted">${t('Record')}</div><div class="font-bold text-white">${ss?.team_wins||0}-${ss?.team_losses||0}</div></div>
-          <div><div class="text-xs text-muted">${t('Conference')}</div><div class="font-bold text-white">${tm.conf}</div></div>
-          <div><div class="text-xs text-muted">${t('Division')}</div><div class="font-bold text-white">${tm.div}</div></div>
+          <div><div class="text-xs text-muted">${t('Conference')}</div><div class="font-bold text-white">${t(tm.conf)}</div></div>
+          <div><div class="text-xs text-muted">${t('Division')}</div><div class="font-bold text-white">${t(tm.div)}</div></div>
           <div><div class="text-xs text-muted">${t('Chemistry')}</div><div class="font-bold ${p.chemistry>=60?'text-good':p.chemistry>=45?'text-warn':'text-bad'}">${p.chemistry}</div></div>
-          <div><div class="text-xs text-muted">${t('Your Role')}</div><div class="font-bold text-white">${p.role}</div></div>
+          <div><div class="text-xs text-muted">${t('Your Role')}</div><div class="font-bold text-white">${t(p.role)}</div></div>
         </div>
       </div>` : '';
   const phaseLabel = (S.season?.current_phase||'regular_season').replace('_',' ');
@@ -833,9 +833,9 @@ async function renderDashboard(m) {
     <div class="space-y-5">
       ${retCard}
       <div class="card p-4 flex items-center justify-between flex-wrap gap-3">
-        <div><span class="text-sm font-semibold text-gray-300">🎮 Game Mode</span> <span class="text-xs text-faint ml-1">${S.season?.game_mode==='story'?'more story, fewer games':S.season?.game_mode==='sandbox'?'edit attributes to test builds':'balanced default'}</span></div>
+        <div><span class="text-sm font-semibold text-gray-300">🎮 ${t('Game Mode')}</span> <span class="text-xs text-faint ml-1">${t(S.season?.game_mode==='story'?'more story, fewer games':S.season?.game_mode==='sandbox'?'edit attributes to test builds':'balanced default')}</span></div>
         <div class="flex gap-2 items-center">
-          ${['story','classic','sandbox'].map(m=>`<button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.game_mode||'classic')===m?'!text-accent':''}" onclick="setGameMode('${m}')">${m[0].toUpperCase()+m.slice(1)}</button>`).join('')}
+          ${['story','classic','sandbox'].map(m=>`<button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.game_mode||'classic')===m?'!text-accent':''}" onclick="setGameMode('${m}')">${t(m[0].toUpperCase()+m.slice(1))}</button>`).join('')}
           <span class="text-bg-border">|</span>
           <button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.lang||'en')==='en'?'!text-accent':''}" onclick="setLang('en')">EN</button>
           <button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.lang||'en')==='zh'?'!text-accent':''}" onclick="setLang('zh')">中文</button>
@@ -848,13 +848,13 @@ async function renderDashboard(m) {
             <p class="text-xs mono text-muted uppercase tracking-wider">${p.team_name} (${p.team_tier||'—'}) · ${p.position} · ${p.draft_pick?`#${p.draft_pick} pick`:'Undrafted'}</p>
             <h2 class="text-3xl font-black text-white mt-1">${esc(p.name)}</h2>
             <div class="flex gap-2 mt-2 flex-wrap text-xs">
-              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">Age ${p.age}</span>
+              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">${t('Age')} ${p.age}</span>
               <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">${p.height}m / ${p.weight}kg</span>
-              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">Year ${p.experience+1}</span>
-              <span class="px-2 py-1 rounded-full bg-accent/15 text-accent border border-accent/30">${p.role}</span>
+              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">${t('Year')} ${p.experience+1}</span>
+              <span class="px-2 py-1 rounded-full bg-accent/15 text-accent border border-accent/30">${t(p.role)}</span>
               <span class="px-2 py-1 rounded-full bg-cyber/15 text-cyber border border-cyber/30">OVR ${p.overall}</span>
-              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted" title="Growth archetype">${GROWTH_LABELS[p.growth] || GROWTH_LABELS.steady}</span>
-              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">${p.tier||'—'}</span>
+              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted" title="Growth archetype">${t(GROWTH_LABELS[p.growth] || GROWTH_LABELS.steady)}</span>
+              <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">${t(p.tier||'—')}</span>
               <span class="px-2 py-1 rounded-full bg-bg-hover border border-bg-border text-muted">${ctrLabel}</span>
             </div>
           </div>
@@ -895,7 +895,7 @@ async function renderDashboard(m) {
       ${weekendCard}
       ${optionCard}
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Season ${S.season?.current_season||1} Progress</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Season')} ${S.season?.current_season||1} ${t('Progress')}</h3>
         <div class="bar-track h-3 mb-2"><div class="bar-fill" style="width:${Math.min(100,(gamesDone/82)*100)}%;background:linear-gradient(90deg,#f59e0b,#fbbf24)"></div></div>
         <div class="flex justify-between text-xs text-muted">
           <span>${gamesDone}/82 games</span><span>${phaseLabel}</span><span>${ss?.team_wins||0}-${ss?.team_losses||0}</span>
@@ -912,10 +912,10 @@ async function renderDashboard(m) {
   function nextActionText() {
     if (p.retirement_pending) return 'Your retirement decision is pending — choose above.';
     if (p.draft_pick === 0 && (p.draft_year || 0) === 0) return 'Complete your draft to begin your career.';
-    if (phase === 'offseason') return p.free_agent ? 'You are a free agent — sign a contract before the next season.' : 'Train once to improve, then advance to next season.';
+    if (phase === 'offseason') return p.free_agent ? 'You are a free agent — sign a contract before the next season.' : t('Train once to improve, then advance to next season.');
     if (phase === 'playoffs') return `Playoffs — series ${S.season?.series_wins||0}-${S.season?.series_losses||0}. Play the next game.`;
     if (gamesDone >= 82) return 'All 82 games played — finalize to see your awards.';
-    if (p.injury_status) return `Injured: ${p.injury_status} (${p.injury_games_remaining} games left). Games simulate without you.`;
+    if (p.injury_status) return `Injured: ${t(p.injury_status)} (${p.injury_games_remaining} games left). Games simulate without you.`;
     return `Next up: Game ${gamesDone+1} of 82.`;
   }
 
@@ -925,7 +925,7 @@ async function renderDashboard(m) {
     $('#dash-games').innerHTML = logs.games.length ? logs.games.map(g=>`
       <div class="flex items-center gap-3 py-2 border-b border-bg-border text-sm cursor-pointer hover:bg-bg-hover" onclick="showGameDetailCached(${g.id})">
         <span class="w-7 font-bold ${g.result==='W'?'text-good':'text-bad'}">${g.result}</span>
-        <span class="flex-1">vs ${S.teams?.[g.opponent_team_id]?.name||'Team '+g.opponent_team_id}</span>
+        <span class="flex-1">${t('vs')} ${S.teams?.[g.opponent_team_id]?.name||'Team '+g.opponent_team_id}</span>
         <span class="mono text-white font-semibold w-8 text-right">${g.pts}</span>
         <span class="text-muted w-8 text-right">${g.reb}r</span>
         <span class="text-muted w-8 text-right">${g.ast}a</span>
@@ -1386,7 +1386,7 @@ async function renderGame(m) {
         <div class="flex items-center justify-center gap-5 mb-1">
           <div class="text-center">
             <div class="font-bold text-white text-lg">${S.player.team_name}</div>
-            <div class="text-xs text-muted">${t('You')} · ${S.player.role}</div>
+            <div class="text-xs text-muted">${t('You')} · ${t(S.player.role)}</div>
           </div>
           <span class="text-2xl font-black text-muted">${t('vs')}</span>
           <div class="text-center">
@@ -1394,7 +1394,7 @@ async function renderGame(m) {
             <div class="text-xs text-muted">OVR ${oppOvr}</div>
           </div>
         </div>
-        ${S.player.injury_status ? `<div class="mt-2 text-sm text-bad">🏥 ${S.player.injury_status} — out ${S.player.injury_games_remaining} game(s)</div>` : ''}
+        ${S.player.injury_status ? `<div class="mt-2 text-sm text-bad">🏥 ${t(S.player.injury_status)} — out ${S.player.injury_games_remaining} game(s)</div>` : ''}
         <div class="flex gap-3 justify-center flex-wrap mt-4">
           <button class="btn-primary text-lg px-8" id="g-sim">🏀 Play Game</button>
           <button class="btn-secondary" id="g-batch5">Sim 5</button>
@@ -1442,7 +1442,7 @@ async function renderGame(m) {
         <div class="space-y-1">
           ${upcoming.map((g,i)=>`
             <div class="flex items-center justify-between py-2 ${i===0?'text-white':'text-muted'} border-b border-bg-border last:border-0">
-              <span class="text-sm">${i===0?'▶ ':''}Game ${gamesDone+i+1} · vs ${g.opponent_name}</span>
+              <span class="text-sm">${i===0?'▶ ':''}${t('Game')} ${gamesDone+i+1} · ${t('vs')} ${g.opponent_name}</span>
               <span class="text-xs mono ${g.opponent_ovr>=80?'text-cyber':g.opponent_ovr>=70?'text-gray-300':'text-faint'}">OVR ${g.opponent_ovr}</span>
             </div>`).join('')}
         </div>
@@ -1505,6 +1505,14 @@ const UI = {
   'Record':         { zh: '战绩' },
   'Conference':     { zh: '分区' },
   'Division':       { zh: '赛区' },
+  'East':           { zh: '东部' },
+  'West':           { zh: '西部' },
+  'Atlantic':       { zh: '大西洋' },
+  'Southeast':      { zh: '东南' },
+  'Central':        { zh: '中部' },
+  'Southwest':      { zh: '西南' },
+  'Northwest':      { zh: '西北' },
+  'Pacific':        { zh: '太平洋' },
   'Chemistry':      { zh: '化学反应' },
   'Your Role':      { zh: '场上角色' },
   'Morale':         { zh: '士气' },
@@ -1622,6 +1630,94 @@ const UI = {
   'Recent Games':   { zh: '近期比赛' },
   'chance per game':{ zh: '每场伤病概率' },
   'Clout':          { zh: '影响力' },
+  'Hot':            { zh: '火热' },
+  'Cold':           { zh: '冰冷' },
+  // game mode
+  'Story':          { zh: '故事' },
+  'Classic':        { zh: '经典' },
+  'Sandbox':        { zh: '沙盒' },
+  'more story, fewer games': { zh: '更多故事，更少比赛' },
+  'edit attributes to test builds': { zh: '编辑属性，测试搭配' },
+  'balanced default': { zh: '平衡默认' },
+  // player info
+  'Age':            { zh: '年龄' },
+  'Year':           { zh: '第' },
+  'years old':      { zh: '岁' },
+  // roles
+  'Ball-Dominant Creator': { zh: '持球进攻核心' },
+  'Off-Ball Finisher': { zh: '无球终结者' },
+  'Rim Protector':  { zh: '护框者' },
+  'Two-Way Wing':   { zh: '攻防兼备侧翼' },
+  '3-and-D Specialist': { zh: '三分防守专家' },
+  'Point Forward':  { zh: '持球前锋' },
+  'Stretch Big':    { zh: '空间型大个' },
+  'Defensive Anchor': { zh: '防守核心' },
+  // tiers
+  'Superstar':      { zh: '超级巨星' },
+  'All-Star':       { zh: '全明星' },
+  'Starter':        { zh: '首发' },
+  'Rotation':       { zh: '轮换' },
+  'Bench':          { zh: '替补' },
+  'Fringe':         { zh: '边缘' },
+  'Title Contender':{ zh: '争冠球队' },
+  'Playoff Team':   { zh: '季后赛球队' },
+  'Play-In Fringe': { zh: '附加赛边缘' },
+  'Lottery / Rebuild': { zh: '摆烂重建' },
+  // growth archetypes
+  'Prodigy':        { zh: '天才' },
+  'Steady':         { zh: '稳健' },
+  'Late Bloomer':   { zh: '晚成' },
+  'Ageless':        { zh: '不老' },
+  'Fizzle':         { zh: '昙花一现' },
+  // phase info
+  'Offseason':      { zh: '休赛期' },
+  'Playoffs':       { zh: '季后赛' },
+  'Train once to improve, then advance to next season.': { zh: '训练一次提升自己，然后推进到下赛季。' },
+  'Train once, then advance to the next season.': { zh: '训练一次，然后推进到下赛季。' },
+  'Season':         { zh: '赛季' },
+  'Progress':       { zh: '进度' },
+  'games':          { zh: '场比赛' },
+  // injuries
+  'Minor sprain':   { zh: '轻微扭伤' },
+  'Moderate strain': { zh: '中度拉伤' },
+  'Serious sprain': { zh: '严重扭伤' },
+  'Major injury':   { zh: '重大伤病' },
+  'Season-ending injury': { zh: '赛季报销' },
+  'Personal matter': { zh: '个人事务' },
+  // off-court descriptions
+  'No media right now.': { zh: '现在没有媒体采访。' },
+  'No international tournament this offseason.': { zh: '本休赛期没有国际赛事。' },
+  'Media shows up when you do something big — 50+ points, a triple-double, a broken record, an All-Star nod.': { zh: '媒体会在你干出大事时出现——50+分、三双、破纪录、全明星入选。' },
+  'Available during the offseason.': { zh: '仅休赛期可用。' },
+  'You\'ve already used your offseason (training, tour, or international play).': { zh: '你已使用了休赛期（训练、巡回或国际赛事）。' },
+  // new game
+  'No games yet':   { zh: '暂无比赛' },
+  'Head to Play Game to get started.': { zh: '前往比赛页面开始。' },
+  // stat labels
+  'PTS':            { zh: '得分' },
+  'REB':            { zh: '篮板' },
+  'AST':            { zh: '助攻' },
+  'STL':            { zh: '抢断' },
+  'BLK':            { zh: '盖帽' },
+  'TOV':            { zh: '失误' },
+  'PF':             { zh: '犯规' },
+  'MIN':            { zh: '分钟' },
+  'FG':             { zh: '命中' },
+  '3PT':            { zh: '三分' },
+  'FT':             { zh: '罚球' },
+  // retired
+  'Retired':        { zh: '已退役' },
+  'Choose a Second Life': { zh: '选择你的第二人生' },
+  'Begin Retirement': { zh: '开始退役' },
+  // career page
+  'Who You Are':    { zh: '你是什么样的人' },
+  'records held':   { zh: '保持纪录' },
+  // growth labels
+  '🌟 Prodigy':     { zh: '🌟 天才' },
+  '📈 Steady':      { zh: '📈 稳健' },
+  '🌱 Late Bloomer': { zh: '🌱 大器晚成' },
+  '⏳ Aging Gracefully': { zh: '⏳ 优雅老去' },
+  '💨 Flash in the Pan': { zh: '💨 昙花一现' },
   // attributes
   'Attribute Matrix': { zh: '属性矩阵' },
   'Static Physicals are permanent. Dynamic & skills can be developed.': { zh: '身体静态无法改变。运动能力与技能可以提升。' },
@@ -1715,7 +1811,7 @@ const UI = {
   'Head to Play Game to get started.': { zh: '前往比赛页面开始。' },
   'Could not load data.': { zh: '无法加载数据。' },
 };
-function t(s) { return (UI[s] && (UI[s][S.season?.lang] || s)) || s; }
+function t(s) { const lang = S.season?.lang || 'en'; const entry = UI[s]; const result = (entry && (entry[lang] || s)) || s; return result; }
 
 function tickerLine(g) {
   const b = g.box_score || {};
