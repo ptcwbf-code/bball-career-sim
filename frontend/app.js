@@ -236,8 +236,14 @@ function renderShotProfileChart(sp) {
 // ============================================================
 // Reset the creation wizard so "New Game" starts a fresh save, not a re-draft
 // of the player who was just created.
+const NATIONALITIES = {
+  'USA': '🇺🇸 USA', 'Canada': '🇨🇦 Canada', 'France': '🇫🇷 France', 'Spain': '🇪🇸 Spain',
+  'Serbia': '🇷🇸 Serbia', 'Greece': '🇬🇷 Greece', 'Germany': '🇩🇪 Germany', 'Australia': '🇦🇺 Australia',
+  'China': '🇨🇳 China', 'Argentina': '🇦🇷 Argentina', 'Lithuania': '🇱🇹 Lithuania', 'Slovenia': '🇸🇮 Slovenia',
+  'Brazil': '🇧🇷 Brazil', 'Japan': '🇯🇵 Japan', 'Nigeria': '🇳🇬 Nigeria', 'Italy': '🇮🇹 Italy',
+};
 function resetCreate() {
-  S.create = { name:'', position:'PG', age:19, height:null, weight:null, allocs:{}, background:'small_town', _backgrounds:null, _step:1, _pool:null };
+  S.create = { name:'', position:'PG', age:19, height:null, weight:null, allocs:{}, background:'small_town', nationality:'USA', _backgrounds:null, _step:1, _pool:null };
 }
 
 function renderCreate(m) {
@@ -355,6 +361,12 @@ function renderCreateStep1(m) {
             class="w-full bg-bg border border-bg-border rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:border-accent outline-none">
         </div>
         <div>
+          <label class="block text-sm font-semibold text-gray-200 mb-1.5">Nationality</label>
+          <select id="c-nat" class="w-full bg-bg border border-bg-border rounded-lg px-3 py-2.5 text-white outline-none">
+            ${Object.entries(NATIONALITIES).map(([c,label])=>`<option value="${c}" ${S.create.nationality===c?'selected':''}>${label}</option>`).join('')}
+          </select>
+        </div>
+        <div>
           <label class="block text-sm font-semibold text-gray-200 mb-2">Position</label>
           <div class="grid grid-cols-5 gap-2">
             ${Object.entries(positions).map(([p,[label,icon]])=>`
@@ -413,7 +425,7 @@ function renderCreateStep1(m) {
   $('#c-next1').onclick = () => {
     const name = $('#c-name').value.trim();
     if (!name) { toast('Please enter a name','warn'); return; }
-    S.create.name = name; S.create.age = parseInt($('#c-age').value);
+    S.create.name = name; S.create.age = parseInt($('#c-age').value); S.create.nationality = $('#c-nat').value;
     S.create._step = 2; renderCreate($('#main'));
   };
 }
@@ -564,7 +576,8 @@ function renderDraftNight(m) {
         name:S.create.name, position:S.create.position, age:S.create.age,
         height:S.create.height, weight:S.create.weight, allocations:S.create.allocs,
         luck_bonus: S.create._pool?.luck_bonus ?? null,
-        background: S.create.background || 'small_town'
+        background: S.create.background || 'small_town',
+        nationality: S.create.nationality || 'USA'
       })});
       S.playerId = res.player_id; S.player = res.player; localStorage.setItem('bball_pid', res.player_id);
       await refreshSeason();
