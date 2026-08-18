@@ -124,6 +124,7 @@ migrateColumns('players', {
   life_values: "TEXT DEFAULT '{}'", flags: "TEXT DEFAULT '[]'",
   goat_bonus: 'REAL DEFAULT 0',
   media_pending: 'TEXT',
+  nationality: "TEXT DEFAULT 'USA'",
 });
 migrateColumns('ai_players', { growth: "TEXT DEFAULT 'steady'", injury_games: 'INTEGER DEFAULT 0', rest_games: 'INTEGER DEFAULT 0', salary: 'REAL DEFAULT 0' });
 migrateColumns('investments', { asset_type: "TEXT DEFAULT 'stocks'", lock_season: 'INTEGER DEFAULT 0' });
@@ -343,7 +344,7 @@ function generateStaticPhysicals(position, height, weight) {
   return { wingspan, standing_reach: standingReach, hand_size: handSize, frame_build: frame, body_fat_pct: bodyFat };
 }
 
-function createPlayerWithPoints(name, position, age, height, weight, allocations, luckBonus = null, background = 'small_town') {
+function createPlayerWithPoints(name, position, age, height, weight, allocations, luckBonus = null, background = 'small_town', nationality = 'USA') {
   const pid = crypto.randomBytes(4).toString('hex');
   const poolInfo = calculatePointPool(position, height, weight, luckBonus);
   const attrs = {};
@@ -402,7 +403,7 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
     'first_step', 'finishing', 'mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'off_ball', 'drawing_fouls',
     'ball_security', 'pnr_vision', 'passing_accuracy', 'free_throw',
     'bbiq', 'clutch_factor', 'work_ethic', 'leadership', 'composure',
-    'fan_base', 'morale', 'background'];
+    'fan_base', 'morale', 'background', 'nationality'];
   const vals = [pid, name, position, role, height, weight, age, teamId, jersey,
     phys.wingspan, phys.standing_reach, phys.hand_size, phys.frame_build, phys.body_fat_pct, potential, growth,
     g('vertical_jump', 45), g('speed', 45), g('lateral_quickness', 45), g('strength', 45), g('core_stability', 45), g('stamina', 55), g('durability', 55),
@@ -410,7 +411,7 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
     g('first_step', 40), g('finishing', 40), g('mid_range', 40), g('catch_shoot_3pt', 35), g('pull_up_3pt', 30), g('off_ball', 40), g('drawing_fouls', 35),
     g('ball_security', 45), g('pnr_vision', 40), g('passing_accuracy', 40), g('free_throw', 65),
     g('bbiq', 50), g('clutch_factor', 50), g('work_ethic', 50), g('leadership', 40), g('composure', 50),
-    fanBase, morale, bg];
+    fanBase, morale, bg, nationality];
 
   db.prepare(`INSERT INTO players (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
   const sal = round1(randRange(1.0, 8.0));
@@ -2946,11 +2947,12 @@ function playIntlTournament(playerId) {
     .run(fanGain, cloutGain, state.current_season, playerId);
   addValues(playerId, { fame: medal === 'gold' ? 3 : medal === 'silver' ? 2 : medal === 'bronze' ? 1 : 0 });
   const cfg = INTL_TOURNAMENTS[tournament];
+  const nat = p.nationality || 'your country';
   const medalLabel = medal === 'gold' ? '🥇 Gold' : medal === 'silver' ? '🥈 Silver' : medal === 'bronze' ? '🥉 Bronze' : 'Group stage exit';
   db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)")
-    .run(playerId, state.current_season, 'event', `${cfg.label}: ${medalLabel} — +${fanGain} global fan base, +${cloutGain} clout.`);
+    .run(playerId, state.current_season, 'event', `${cfg.label}: ${medalLabel} for ${nat} — +${fanGain} global fan base, +${cloutGain} clout.`);
   db.prepare('UPDATE league_state SET intl_tournament=NULL WHERE player_id=?').run(playerId);
-  return { tournament: cfg.label, medal, medal_label: medalLabel, fan_base: fanGain, clout: cloutGain };
+  return { tournament: cfg.label, nationality: nat, medal, medal_label: medalLabel, fan_base: fanGain, clout: cloutGain };
 }
 
 const SHOE_BRANDS = ['Nike', 'Adidas', 'Jordan Brand', 'Puma', 'Under Armour', 'Anta', 'Li-Ning', 'New Balance'];
@@ -3902,7 +3904,7 @@ function wrap(fn) {
 
 // Player
 app.post('/api/player/create', wrap((req) => {
-  const { name, position, age = 19, height, weight, allocations, luck_bonus, background } = req.body || {};
+  const { name, position, age = 19, height, weight, allocations, luck_bonus, background, nationality = 'USA' } = req.body || {};
   if (!POSITION_PROFILES[position]) throw httpError(400, 'Invalid position');
   if (!(age >= 19 && age <= 23)) throw httpError(400, `Age must be 19-23, got ${age}`);
   const profile = POSITION_PROFILES[position];
@@ -3911,7 +3913,7 @@ app.post('/api/player/create', wrap((req) => {
   const poolInfo = calculatePointPool(position, height, weight, luck_bonus ?? null);
   const totalAllocated = Object.values(allocations || {}).reduce((a, b) => a + b, 0);
   if (totalAllocated !== poolInfo.total_points) throw httpError(400, `Allocation total ${totalAllocated} does not match point pool ${poolInfo.total_points}`);
-  const pid = createPlayerWithPoints(name, position, age, height, weight, allocations, luck_bonus ?? null, background);
+  const pid = createPlayerWithPoints(name, position, age, height, weight, allocations, luck_bonus ?? null, background, nationality);
   const player = db.prepare('SELECT * FROM players WHERE id=?').get(pid);
   return { player_id: pid, player: sanitizePlayer(player), pool_info: poolInfo };
 }));

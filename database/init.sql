@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS players (
     life_values TEXT DEFAULT '{}', flags TEXT DEFAULT '[]',
     goat_bonus REAL DEFAULT 0,
     media_pending TEXT,
+    nationality TEXT DEFAULT 'USA',
     retired INTEGER DEFAULT 0,
     retirement_pending INTEGER DEFAULT 0,
     second_life TEXT,
