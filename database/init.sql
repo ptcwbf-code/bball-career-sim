@@ -34,25 +34,34 @@ CREATE TABLE IF NOT EXISTS players (
     clout REAL DEFAULT 2, fan_base REAL DEFAULT 5,
     wealth REAL DEFAULT 0.1, chemistry INTEGER DEFAULT 50,
     lifestyle INTEGER DEFAULT 1, advisor_trust INTEGER DEFAULT 65,
+    locker_actions_used INTEGER DEFAULT 0,
+    pending_weekend INTEGER DEFAULT 0,
+    pending_option INTEGER DEFAULT 0,
     mvp_votes REAL DEFAULT 0, trained_season INTEGER DEFAULT 0,
     s_pts REAL DEFAULT 0, s_reb REAL DEFAULT 0, s_ast REAL DEFAULT 0,
     s_stl REAL DEFAULT 0, s_blk REAL DEFAULT 0, s_tov REAL DEFAULT 0,
     s_fga REAL DEFAULT 0, s_fgm REAL DEFAULT 0, s_3pa REAL DEFAULT 0,
-    s_3pm REAL DEFAULT 0, s_fta REAL DEFAULT 0, s_ftm REAL DEFAULT 0,
+    s_3pm REAL DEFAULT 0, s_fga_mid REAL DEFAULT 0, s_fta REAL DEFAULT 0, s_ftm REAL DEFAULT 0,
     s_games INTEGER DEFAULT 0, s_min REAL DEFAULT 0, s_pf INTEGER DEFAULT 0,
     s_wins INTEGER DEFAULT 0, s_losses INTEGER DEFAULT 0,
     p_pts REAL DEFAULT 0, p_reb REAL DEFAULT 0, p_ast REAL DEFAULT 0,
     p_stl REAL DEFAULT 0, p_blk REAL DEFAULT 0, p_tov REAL DEFAULT 0,
     p_fga REAL DEFAULT 0, p_fgm REAL DEFAULT 0, p_3pa REAL DEFAULT 0,
-    p_3pm REAL DEFAULT 0, p_fta REAL DEFAULT 0, p_ftm REAL DEFAULT 0,
+    p_3pm REAL DEFAULT 0, p_fga_mid REAL DEFAULT 0, p_fta REAL DEFAULT 0, p_ftm REAL DEFAULT 0,
     p_games INTEGER DEFAULT 0, p_min REAL DEFAULT 0, p_pf INTEGER DEFAULT 0,
     p_wins INTEGER DEFAULT 0, p_losses INTEGER DEFAULT 0,
     background TEXT DEFAULT 'small_town',
     dev_focus TEXT, last_dev_game INTEGER DEFAULT 0,
     potential INTEGER DEFAULT 50,
     growth TEXT DEFAULT 'steady',
+    tactics_defense TEXT DEFAULT 'balanced', tactics_offense TEXT DEFAULT 'balanced',
+    life_values TEXT DEFAULT '{}', flags TEXT DEFAULT '[]',
+    goat_bonus REAL DEFAULT 0,
+    media_pending TEXT,
     retired INTEGER DEFAULT 0,
     retirement_pending INTEGER DEFAULT 0,
+    second_life TEXT,
+    legacy_score REAL DEFAULT 0,
     injury_treatment TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
@@ -114,6 +123,8 @@ CREATE TABLE IF NOT EXISTS contracts (
     player_id TEXT NOT NULL, season_number INTEGER, team_id INTEGER,
     years INTEGER, total_value REAL, annual_salary REAL,
     contract_type TEXT DEFAULT 'Standard',
+    player_option INTEGER DEFAULT 0,
+    no_trade INTEGER DEFAULT 0,
     signed_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -208,6 +219,14 @@ CREATE TABLE IF NOT EXISTS endorsement_offers (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS shoes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id TEXT NOT NULL, brand TEXT NOT NULL,
+    name TEXT NOT NULL, colorway TEXT,
+    annual_value REAL DEFAULT 0, signed_season INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS league_state (
     player_id TEXT PRIMARY KEY,
     current_season INTEGER DEFAULT 1,
@@ -219,7 +238,9 @@ CREATE TABLE IF NOT EXISTS league_state (
     playoff_opponent INTEGER DEFAULT 0,
     player_seed INTEGER DEFAULT 0,
     opponent_seed INTEGER DEFAULT 0,
-    market REAL DEFAULT 0
+    market REAL DEFAULT 0,
+    intl_tournament TEXT,
+    game_mode TEXT DEFAULT 'classic'
 );
 
 CREATE TABLE IF NOT EXISTS team_records (
