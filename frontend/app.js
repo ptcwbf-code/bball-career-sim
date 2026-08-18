@@ -35,23 +35,24 @@ function toast(msg, type='info') {
 // TABS
 // ============================================================
 const TABS = [
-  { id:'create', icon:'🎮', label:'New Game', needPlayer:false },
-  { id:'dashboard', icon:'📊', label:'Dashboard', needPlayer:true },
-  { id:'attributes', icon:'🧬', label:'Attributes', needPlayer:true },
-  { id:'season', icon:'📅', label:'Season', needPlayer:true },
-  { id:'game', icon:'🏟️', label:'Play Game', needPlayer:true },
-  { id:'training', icon:'💪', label:'Training', needPlayer:true },
-  { id:'career', icon:'🏆', label:'Career', needPlayer:true },
-  { id:'offcourt', icon:'💼', label:'Off-Court', needPlayer:true },
-  { id:'league', icon:'🌐', label:'League', needPlayer:true },
-  { id:'saves', icon:'💾', label:'Save', needPlayer:true },
+  { id:'create', icon:'🎮', label:'New Game', zh:'新游戏', needPlayer:false },
+  { id:'dashboard', icon:'📊', label:'Dashboard', zh:'仪表盘', needPlayer:true },
+  { id:'attributes', icon:'🧬', label:'Attributes', zh:'属性', needPlayer:true },
+  { id:'season', icon:'📅', label:'Season', zh:'赛季', needPlayer:true },
+  { id:'game', icon:'🏟️', label:'Play Game', zh:'比赛', needPlayer:true },
+  { id:'training', icon:'💪', label:'Training', zh:'训练', needPlayer:true },
+  { id:'career', icon:'🏆', label:'Career', zh:'生涯', needPlayer:true },
+  { id:'offcourt', icon:'💼', label:'Off-Court', zh:'场外', needPlayer:true },
+  { id:'league', icon:'🌐', label:'League', zh:'联盟', needPlayer:true },
+  { id:'saves', icon:'💾', label:'Save', zh:'存档', needPlayer:true },
 ];
 
 function renderTabs() {
   const nav = $('#tab-nav');
-  nav.innerHTML = TABS.filter(t => S.player || !t.needPlayer).map(t => `
-    <button class="tab ${S.tab===t.id?'active':''}" data-tab="${t.id}">
-      ${t.icon} ${t.label}${t.id==='offcourt' && S.mediaPending ? '<span class="ml-1 inline-block w-2 h-2 rounded-full bg-bad"></span>' : ''}
+  const lang = S.season?.lang || 'en';
+  nav.innerHTML = TABS.filter(t => S.player || !t.needPlayer).map(tab => `
+    <button class="tab ${S.tab===tab.id?'active':''}" data-tab="${tab.id}">
+      ${tab.icon} ${lang==='zh'?(tab.zh||tab.label):tab.label}${tab.id==='offcourt' && S.mediaPending ? '<span class="ml-1 inline-block w-2 h-2 rounded-full bg-bad"></span>' : ''}
     </button>`).join('');
   $$('.tab', nav).forEach(b => b.onclick = () => switchTab(b.dataset.tab));
 }
@@ -695,7 +696,7 @@ async function renderRetired(m) {
         </div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏅 Awards</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏅 ${t('Awards')}</h3>
         <div class="flex flex-wrap gap-2">
           ${c?.awards?.length ? c.awards.map(a=>`<span class="px-3 py-1.5 rounded-full text-xs font-semibold bg-accent/10 text-accent border border-accent/30">S${a.season_number} · ${a.award_name}</span>`).join('') : '<span class="text-muted text-sm">No awards.</span>'}
         </div>
@@ -791,19 +792,19 @@ async function renderDashboard(m) {
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="resolveOption('decline')">🚪 Decline (free agency)</button>
         </div>
       </div>` : '';
-  const t = S.teams?.[p.team_id];
-  const teamCard = t ? `
+  const tm = S.teams?.[p.team_id];
+  const teamCard = tm ? `
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏀 Team Overview — ${esc(t.name)}</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏀 ${t('Team Overview')} — ${esc(tm.name)}</h3>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <div><div class="text-xs text-muted">Overall</div><div class="font-bold text-white">${t.ovr} <span class="text-[10px] text-muted">(${p.team_tier||''})</span></div></div>
-          <div><div class="text-xs text-muted">Offense</div><div class="font-bold text-accent">${t.off}</div></div>
-          <div><div class="text-xs text-muted">Defense</div><div class="font-bold text-cyber">${t.def}</div></div>
-          <div><div class="text-xs text-muted">Record</div><div class="font-bold text-white">${ss?.team_wins||0}-${ss?.team_losses||0}</div></div>
-          <div><div class="text-xs text-muted">Conference</div><div class="font-bold text-white">${t.conf}</div></div>
-          <div><div class="text-xs text-muted">Division</div><div class="font-bold text-white">${t.div}</div></div>
-          <div><div class="text-xs text-muted">Chemistry</div><div class="font-bold ${p.chemistry>=60?'text-good':p.chemistry>=45?'text-warn':'text-bad'}">${p.chemistry}</div></div>
-          <div><div class="text-xs text-muted">Your Role</div><div class="font-bold text-white">${p.role}</div></div>
+          <div><div class="text-xs text-muted">${t('Overall')}</div><div class="font-bold text-white">${tm.ovr} <span class="text-[10px] text-muted">(${p.team_tier||''})</span></div></div>
+          <div><div class="text-xs text-muted">${t('Offense')}</div><div class="font-bold text-accent">${tm.off}</div></div>
+          <div><div class="text-xs text-muted">${t('Defense')}</div><div class="font-bold text-cyber">${tm.def}</div></div>
+          <div><div class="text-xs text-muted">${t('Record')}</div><div class="font-bold text-white">${ss?.team_wins||0}-${ss?.team_losses||0}</div></div>
+          <div><div class="text-xs text-muted">${t('Conference')}</div><div class="font-bold text-white">${tm.conf}</div></div>
+          <div><div class="text-xs text-muted">${t('Division')}</div><div class="font-bold text-white">${tm.div}</div></div>
+          <div><div class="text-xs text-muted">${t('Chemistry')}</div><div class="font-bold ${p.chemistry>=60?'text-good':p.chemistry>=45?'text-warn':'text-bad'}">${p.chemistry}</div></div>
+          <div><div class="text-xs text-muted">${t('Your Role')}</div><div class="font-bold text-white">${p.role}</div></div>
         </div>
       </div>` : '';
   const phaseLabel = (S.season?.current_phase||'regular_season').replace('_',' ');
@@ -833,8 +834,11 @@ async function renderDashboard(m) {
       ${retCard}
       <div class="card p-4 flex items-center justify-between flex-wrap gap-3">
         <div><span class="text-sm font-semibold text-gray-300">🎮 Game Mode</span> <span class="text-xs text-faint ml-1">${S.season?.game_mode==='story'?'more story, fewer games':S.season?.game_mode==='sandbox'?'edit attributes to test builds':'balanced default'}</span></div>
-        <div class="flex gap-2">
+        <div class="flex gap-2 items-center">
           ${['story','classic','sandbox'].map(m=>`<button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.game_mode||'classic')===m?'!text-accent':''}" onclick="setGameMode('${m}')">${m[0].toUpperCase()+m.slice(1)}</button>`).join('')}
+          <span class="text-bg-border">|</span>
+          <button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.lang||'en')==='en'?'!text-accent':''}" onclick="setLang('en')">EN</button>
+          <button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.lang||'en')==='zh'?'!text-accent':''}" onclick="setLang('zh')">中文</button>
         </div>
       </div>
       <!-- Identity + Next action -->
@@ -877,12 +881,12 @@ async function renderDashboard(m) {
 
       <!-- Status -->
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Player Status</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Player Status')}</h3>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-          ${meter('Fatigue','⚡',p.fatigue,100,'#f59e0b')}
-          ${meter('Morale','😊',p.morale,100,'#34d399')}
-          <div><div class="flex justify-between text-xs mb-1.5"><span class="text-muted">🩹 Injury Risk</span><span class="mono text-gray-200">${injPct}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, injPct*25)}%;background:#f87171"></div></div><p class="text-[10px] text-faint mt-1">chance per game</p></div>
-          ${meter('Clout','👑',p.clout,100,'#06b6d4')}
+          ${meter(t('Fatigue'),'⚡',p.fatigue,100,'#f59e0b')}
+          ${meter(t('Morale'),'😊',p.morale,100,'#34d399')}
+          <div><div class="flex justify-between text-xs mb-1.5"><span class="text-muted">🩹 ${t('Injury Risk')}</span><span class="mono text-gray-200">${injPct}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, injPct*25)}%;background:#f87171"></div></div><p class="text-[10px] text-faint mt-1">${t('chance per game')}</p></div>
+          ${meter(t('Clout'),'👑',p.clout,100,'#06b6d4')}
         </div>
       </div>
 
@@ -900,7 +904,7 @@ async function renderDashboard(m) {
 
       <!-- Recent games -->
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Recent Games</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Recent Games')}</h3>
         <div id="dash-games">Loading…</div>
       </div>
     </div>`;
@@ -1048,6 +1052,13 @@ async function setGameMode(mode) {
   switchTab('dashboard');
 }
 
+async function setLang(lang) {
+  await api(`/settings/${S.playerId}?lang=${lang}`, { method:'PUT' });
+  await refreshSeason();
+  toast(lang === 'zh' ? '语言已切换为中文' : 'Language set to English', 'success');
+  switchTab('dashboard');
+}
+
 async function editAttr(attr) {
   const val = prompt(`Set ${attr.replace(/_/g,' ')} (10-99):`);
   if (val == null) return;
@@ -1112,18 +1123,18 @@ async function renderSeason(m) {
       </div>`:''}
 
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">📈 Recent Scoring</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">📈 ${t('Recent Scoring')}</h3>
         <div class="h-56"><canvas id="season-chart"></canvas></div>
       </div>
 
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🎯 Shot Profile</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🎯 ${t('Shot Profile')}</h3>
         <p class="text-xs text-faint mb-3">Where your field-goal attempts come from this season.</p>
         <div class="h-56"><canvas id="shot-profile-chart"></canvas></div>
       </div>
 
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Game Log</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Game Log')}</h3>
         <div class="overflow-x-auto">
           <table class="w-full text-xs">
             <thead><tr class="text-muted border-b border-bg-border text-left">
@@ -1146,7 +1157,7 @@ async function renderSeason(m) {
 
       ${sums.seasons.length?`
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Season History</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Season History')}</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs">
           <thead><tr class="text-muted border-b border-bg-border text-left">
             <th class="py-2 pr-2">S</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="pr-2">PER</th><th class="pr-2">WS</th><th class="pr-2">Record</th><th class="pr-2">Playoffs</th><th>Awards</th>
@@ -1212,11 +1223,37 @@ async function resolveRetire(choice) {
 }
 
 async function resolveWeekend(choice) {
-  try {
-    const r = await api(`/season/allstar-weekend/${S.playerId}?choice=${choice}`, { method:'POST' });
-    toast(r.message, choice==='skip'?'info':'success');
+  if (choice === 'skip') {
+    const r = await api(`/season/allstar-weekend/${S.playerId}?choice=skip`, { method:'POST' });
+    toast(r.message, 'info');
     await refreshPlayer(); renderDashboard($('#main'));
+    return;
+  }
+  try {
+    const opts = await api(`/season/allstar-weekend-options/${S.playerId}`);
+    const items = choice === 'dunk' ? opts.dunks : opts.spots;
+    const title = choice === 'dunk' ? '🛫 Dunk Contest — pick your dunk' : '🎯 Three-Point Contest — pick your spot';
+    const overlay = document.createElement('div');
+    overlay.id = 'weekend-modal';
+    overlay.className = 'fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4';
+    overlay.innerHTML = `<div class="card p-5 w-full max-w-md">
+      <h3 class="text-lg font-bold text-white mb-3">${title}</h3>
+      <div class="space-y-2">
+        ${items.map(it=>`<button class="w-full text-left card card-hover p-3" onclick="resolveWeekendAction('${choice}','${it.id}')">
+          <div class="flex items-center justify-between"><span class="text-white font-semibold">${it.icon} ${it.label}</span><span class="text-xs text-warn mono">${choice==='dunk'?'difficulty '+it.difficulty.toFixed(1):''}</span></div>
+          <span class="text-xs text-muted">${esc(it.desc)}</span>
+        </button>`).join('')}
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
   } catch(e) { toast('Failed: '+e.message,'error'); }
+}
+
+async function resolveWeekendAction(choice, action) {
+  document.getElementById('weekend-modal')?.remove();
+  const r = await api(`/season/allstar-weekend/${S.playerId}?choice=${choice}&action=${action}`, { method:'POST' });
+  toast(r.message, 'success');
+  await refreshPlayer(); renderDashboard($('#main'));
 }
 
 async function resolveOption(choice) {
@@ -1288,9 +1325,9 @@ async function renderGame(m) {
     m.innerHTML = `
       <div class="card p-8 text-center">
         <div class="text-5xl mb-3">🌅</div>
-        <h3 class="text-xl font-bold text-white mb-2">It's the Offseason</h3>
-        <p class="text-muted mb-5">No games are played now. Spend your training slot to improve, then advance to next season.</p>
-        <button class="btn-primary" onclick="switchTab('training')">💪 Go to Training</button>
+        <h3 class="text-xl font-bold text-white mb-2">${t('It\'s the Offseason')}</h3>
+        <p class="text-muted mb-5">${t('No games are played now. Spend your training slot to improve, then advance to next season.')}</p>
+        <button class="btn-primary" onclick="switchTab('training')">${t('💪 Go to Training')}</button>
       </div>`;
     return;
   }
@@ -1332,9 +1369,9 @@ async function renderGame(m) {
     m.innerHTML = `
       <div class="card p-8 text-center">
         <div class="text-5xl mb-3">🏁</div>
-        <h3 class="text-xl font-bold text-white mb-2">Regular Season Complete</h3>
-        <p class="text-muted mb-5">All 82 games are done. Finalize the season to calculate your awards and move into the offseason.</p>
-        <button class="btn-primary" onclick="finalizeSeason()">🏁 Finalize Season</button>
+        <h3 class="text-xl font-bold text-white mb-2">${t('Regular Season Complete')}</h3>
+        <p class="text-muted mb-5">${t('All 82 games are done. Finalize the season to calculate your awards and move into the offseason.')}</p>
+        <button class="btn-primary" onclick="finalizeSeason()">${t('🏁 Finalize Season')}</button>
       </div>`;
     return;
   }
@@ -1344,14 +1381,14 @@ async function renderGame(m) {
   m.innerHTML = `
     <div class="space-y-5">
       <div class="card p-6 text-center">
-        <div class="text-xs mono text-muted uppercase tracking-wider mb-1" id="g-gamenum">Regular Season · Game ${gamesDone+1} of 82</div>
-        <h3 class="text-lg font-bold text-white mb-4">Next Game</h3>
+        <div class="text-xs mono text-muted uppercase tracking-wider mb-1" id="g-gamenum">${t('Regular Season')} · ${t('Game')} ${gamesDone+1} ${t('of')} 82</div>
+        <h3 class="text-lg font-bold text-white mb-4">${t('Next Game')}</h3>
         <div class="flex items-center justify-center gap-5 mb-1">
           <div class="text-center">
             <div class="font-bold text-white text-lg">${S.player.team_name}</div>
-            <div class="text-xs text-muted">You · ${S.player.role}</div>
+            <div class="text-xs text-muted">${t('You')} · ${S.player.role}</div>
           </div>
-          <span class="text-2xl font-black text-muted">vs</span>
+          <span class="text-2xl font-black text-muted">${t('vs')}</span>
           <div class="text-center">
             <div class="font-bold text-white text-lg">${oppName}</div>
             <div class="text-xs text-muted">OVR ${oppOvr}</div>
@@ -1401,7 +1438,7 @@ async function renderGame(m) {
 
       ${upcoming.length ? `
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Upcoming Schedule</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Upcoming Schedule')}</h3>
         <div class="space-y-1">
           ${upcoming.map((g,i)=>`
             <div class="flex items-center justify-between py-2 ${i===0?'text-white':'text-muted'} border-b border-bg-border last:border-0">
@@ -1437,12 +1474,256 @@ async function simGame(btn) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// Pick a localized string from an {en, zh} pair (or pass through a plain string).
+function pick(v, lang) {
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('en' in v || 'zh' in v)) return v[lang] || v.en || '';
+  return v;
+}
+// UI i18n dictionary — every player-facing string in one place. Extend freely.
+const UI = {
+  // tabs
+  'New Game':       { zh: '新游戏' },
+  'Dashboard':      { zh: '仪表盘' },
+  'Attributes':     { zh: '属性' },
+  'Season':         { zh: '赛季' },
+  'Play Game':      { zh: '比赛' },
+  'Training':       { zh: '训练' },
+  'Career':         { zh: '生涯' },
+  'Off-Court':      { zh: '场外' },
+  'League':         { zh: '联盟' },
+  'Save':           { zh: '存档' },
+  // header
+  'Create a player first': { zh: '请先创建球员' },
+  'Regular Season': { zh: '常规赛' },
+  'Offseason':      { zh: '休赛期' },
+  'Playoffs':       { zh: '季后赛' },
+  // dashboard
+  'Team Overview':  { zh: '球队概览' },
+  'Overall':        { zh: '综合' },
+  'Offense':        { zh: '进攻' },
+  'Defense':        { zh: '防守' },
+  'Record':         { zh: '战绩' },
+  'Conference':     { zh: '分区' },
+  'Division':       { zh: '赛区' },
+  'Chemistry':      { zh: '化学反应' },
+  'Your Role':      { zh: '场上角色' },
+  'Morale':         { zh: '士气' },
+  'Fatigue':        { zh: '疲劳' },
+  'Injury Risk':    { zh: '伤病风险' },
+  'Games Played':   { zh: '已赛' },
+  'Team Record':    { zh: '球队战绩' },
+  'PPG':            { zh: '场均得分' },
+  'RPG':            { zh: '场均篮板' },
+  'APG':            { zh: '场均助攻' },
+  'SPG':            { zh: '场均抢断' },
+  'BPG':            { zh: '场均盖帽' },
+  'MPG':            { zh: '场均时间' },
+  'PTS':            { zh: '得分' },
+  'REB':            { zh: '篮板' },
+  'AST':            { zh: '助攻' },
+  'STL':            { zh: '抢断' },
+  'BLK':            { zh: '盖帽' },
+  'TOV':            { zh: '失误' },
+  'PF':             { zh: '犯规' },
+  'MIN':            { zh: '分钟' },
+  'EFF':            { zh: '效率' },
+  'PER':            { zh: 'PER' },
+  'GmSc':           { zh: '比赛评分' },
+  'Game Mode':      { zh: '游戏模式' },
+  'NBA Draft':      { zh: 'NBA 选秀' },
+  // gameplay
+  'Play Game':      { zh: '进行比赛' },
+  'Sim 5':          { zh: '模拟5场' },
+  'Sim 10':         { zh: '模拟10场' },
+  'Sim to All-Star':{ zh: '模拟至全明星' },
+  'Sim to End':     { zh: '模拟至结束' },
+  'Load Management':{ zh: '负荷管理' },
+  'Finalize Season':{ zh: '结算赛季' },
+  'Game Plan':      { zh: '赛前战术' },
+  'Defense':        { zh: '防守' },
+  'Offense':        { zh: '进攻' },
+  'Simulating…':    { zh: '模拟中…' },
+  'Done':           { zh: '完成' },
+  'Paused':         { zh: '已暂停' },
+  // training
+  'Offseason Training': { zh: '休赛期训练' },
+  'Training Complete': { zh: '训练完成' },
+  '1 slot available': { zh: '1个槽位可用' },
+  'Selected':       { zh: '已选' },
+  // career
+  'G.O.A.T. Tracker': { zh: 'GOAT 追踪' },
+  'Career Totals':  { zh: '生涯总计' },
+  'Career Averages':{ zh: '生涯场均' },
+  'Career Highs':   { zh: '生涯最高' },
+  'Career Trajectory': { zh: '生涯曲线' },
+  'Playoff Career': { zh: '季后赛生涯' },
+  'All-Time Records': { zh: '历史纪录' },
+  'Awards':         { zh: '荣誉' },
+  'Career Timeline':{ zh: '生涯时间线' },
+  'Season History': { zh: '赛季历史' },
+  'Championships':  { zh: '总冠军' },
+  'MVPs':           { zh: 'MVP' },
+  'All-NBA':        { zh: '最佳阵容' },
+  'Seasons':        { zh: '赛季数' },
+  'Games':          { zh: '出场' },
+  'Points':         { zh: '总得分' },
+  'Rebounds':       { zh: '总篮板' },
+  'Assists':        { zh: '总助攻' },
+  'Steals':         { zh: '总抢断' },
+  'Blocks':         { zh: '总盖帽' },
+  'GOAT':           { zh: 'GOAT' },
+  // league
+  'Standings':      { zh: '排名' },
+  "League's Best Players": { zh: '联盟最佳球员' },
+  'MVP Race':       { zh: 'MVP 竞争' },
+  'Stat Leaders':   { zh: '数据领袖' },
+  'League Moves':   { zh: '联盟动态' },
+  // off-court
+  'Media':          { zh: '媒体' },
+  'Endorsements':   { zh: '代言' },
+  'Signature Shoe': { zh: '签名鞋' },
+  'Commercial Tour':{ zh: '商业巡回' },
+  'International Play': { zh: '国际赛事' },
+  'Investments':    { zh: '投资' },
+  'Lifestyle':      { zh: '生活方式' },
+  'Life & Relationships': { zh: '人生与关系' },
+  'Locker Room':    { zh: '更衣室' },
+  'Influence':      { zh: '影响力' },
+  'Demand Trade':   { zh: '要求交易' },
+  'Request Buyout': { zh: '请求买断' },
+  // game page
+  'Game':           { zh: '第' },
+  'of':             { zh: '/' },
+  'Next Game':      { zh: '下一场比赛' },
+  'You':            { zh: '你' },
+  'Upcoming Schedule': { zh: '接下来的赛程' },
+  'Load Management':{ zh: '负荷管理' },
+  'fewer minutes, less fatigue & injury risk': { zh: '减少上场时间，降低疲劳和伤病风险' },
+  'Team Record':    { zh: '球队战绩' },
+  'games played':   { zh: '场比赛' },
+  'It\'s the Offseason': { zh: '现在是休赛期' },
+  'No games are played now. Spend your training slot to improve, then advance to next season.': { zh: '现在不打比赛。花你的训练槽来提升，然后推进到下赛季。' },
+  '💪 Go to Training': { zh: '💪 去训练' },
+  'Regular Season Complete': { zh: '常规赛结束' },
+  'All 82 games are done. Finalize the season to calculate your awards and move into the offseason.': { zh: '82场比赛全部结束。结算赛季来计算你的荣誉，进入休赛期。' },
+  '🏁 Finalize Season': { zh: '🏁 结算赛季' },
+  'Opponent Scouting Report': { zh: '对手侦察报告' },
+  'Load Management': { zh: '负荷管理' },
+  'Recent Scoring': { zh: '近期得分' },
+  'Shot Profile':   { zh: '出手分布' },
+  'Game Log':       { zh: '比赛记录' },
+  'Saved Games':    { zh: '已存档' },
+  'Career Legacy':  { zh: '生涯遗产' },
+  'Second Life':    { zh: '第二人生' },
+  'No media right now.': { zh: '现在没有媒体采访。' },
+  'No international tournament this offseason.': { zh: '本休赛期没有国际赛事。' },
+  'Trained this offseason': { zh: '本休赛期已训练' },
+  'Player Status':  { zh: '球员状态' },
+  'Recent Games':   { zh: '近期比赛' },
+  'chance per game':{ zh: '每场伤病概率' },
+  'Clout':          { zh: '影响力' },
+  // attributes
+  'Attribute Matrix': { zh: '属性矩阵' },
+  'Static Physicals are permanent. Dynamic & skills can be developed.': { zh: '身体静态无法改变。运动能力与技能可以提升。' },
+  'Train to Improve': { zh: '训练提升' },
+  'Fixed at creation — cannot be changed.': { zh: '创建时固定——无法更改。' },
+  'Drives board-crashing and second-chance opportunities.': { zh: '驱动拼抢篮板和二次进攻。' },
+  'Grows with experience.': { zh: '随经验增长。' },
+  'Tactical Role':  { zh: '战术角色' },
+  'Determines your usage rate and play style on the court.': { zh: '决定你在场上的使用率和打法风格。' },
+  'Development Focus': { zh: '发展重心' },
+  'Pick one attribute to accelerate. Your focus gets priority during mid-season development spurts (which also depend on your potential and work ethic).': { zh: '选一个属性优先发展。赛季中期的成长突进会优先考虑你的重心（也取决于你的潜力和工作态度）。' },
+  // training
+  'Offseason Training': { zh: '休赛期训练' },
+  '1 slot available': { zh: '1个槽位可用' },
+  'You\'ve already used your offseason (training or a tour). One or the other.': { zh: '你已使用了休赛期（训练或巡回）。二选一。' },
+  'Training is only available during the offseason.': { zh: '训练仅在休赛期可用。' },
+  'Apply Training Plan': { zh: '执行训练计划' },
+  'Selected':       { zh: '已选' },
+  'Slot':           { zh: '槽位' },
+  'gains':          { zh: '收益' },
+  'full':           { zh: '完整' },
+  'Risk':           { zh: '风险' },
+  'Training Complete': { zh: '训练完成' },
+  // career
+  'G.O.A.T. Tracker': { zh: 'GOAT 追踪' },
+  'Rings':          { zh: '总冠军' },
+  'All-NBA':        { zh: '最佳阵容' },
+  'Career Totals':  { zh: '生涯总计' },
+  'Career Averages':{ zh: '生涯场均' },
+  'Career Highs':   { zh: '生涯最高' },
+  '📈 Career Trajectory': { zh: '📈 生涯曲线' },
+  'Playoff Career': { zh: '季后赛生涯' },
+  'All-Time Records': { zh: '历史纪录' },
+  'Single-game':    { zh: '单场' },
+  'Single-season':  { zh: '单季' },
+  'Awards':         { zh: '荣誉' },
+  'Career Timeline':{ zh: '生涯时间线' },
+  'Season History': { zh: '赛季历史' },
+  // league
+  'Standings':      { zh: '排名' },
+  'Records update as the season progresses. Your team shows your actual record; other teams are projections.': { zh: '随着赛季进行更新战绩。你的球队显示真实战绩，其他球队是预测。' },
+  "League's Best Players": { zh: '联盟最佳球员' },
+  'The rest of the NBA develops, ages, and turns over every offseason.': { zh: 'NBA的其他球员每年休赛期都在成长、老去、更替。' },
+  'MVP Race':       { zh: 'MVP 竞争' },
+  'How you stack up against the league\'s stars this season.': { zh: '你本赛季与联盟球星的对比。' },
+  'Stat Leaders':   { zh: '数据领袖' },
+  'Points / rebounds / assists / steals / blocks — your real numbers vs the league\'s stars.': { zh: '得分 / 篮板 / 助攻 / 抢断 / 盖帽——你的真实数据 vs 联盟球星。' },
+  'League Moves':   { zh: '联盟动态' },
+  'Trades and free-agent signings from the last offseason.': { zh: '上个休赛期的交易和自由球员签约。' },
+  // off-court
+  'Media':          { zh: '媒体' },
+  'Endorsements':   { zh: '代言' },
+  'Signature Shoe': { zh: '签名鞋' },
+  'Commercial Tour':{ zh: '商业巡回' },
+  'Spend your offseason growing your global brand instead of training — one or the other.': { zh: '用你的休赛期扩大全球品牌影响力——与训练二选一。' },
+  'International Play': { zh: '国际赛事' },
+  'In a tournament year, you can represent your country — national glory, but it costs your training slot.': { zh: '在大赛年，你可以代表国家出战——为国争光，但会占用训练槽。' },
+  'Investments':    { zh: '投资' },
+  'Lifestyle':      { zh: '生活方式' },
+  'Life & Relationships': { zh: '人生与关系' },
+  'The people around you. Healthy bonds steady your game; broken ones rattle it.': { zh: '你身边的人。健康的关系稳定你的比赛；破裂的关系动摇它。' },
+  'Locker Room':    { zh: '更衣室' },
+  'Your teammates and how you gel with them. Wins bring the room together; losses and selfishness fray it.': { zh: '你的队友和你们的默契。胜利让更衣室团结；失败和自私让它瓦解。' },
+  // saves
+  'Saves':          { zh: '存档' },
+  'Export Career':  { zh: '导出生涯' },
+  // create wizard
+  'Create Your Player': { zh: '创建你的球员' },
+  'Choose your identity. Your position shapes your natural strengths.': { zh: '选择你的身份。你的位置塑造你的天然优势。' },
+  'Player Name':    { zh: '球员名' },
+  'e.g. Victor Storm': { zh: '例如：Victor Storm' },
+  'Nationality':    { zh: '国籍' },
+  'Position':       { zh: '位置' },
+  'Age':            { zh: '年龄' },
+  'Older prospects are more polished but have less upside.': { zh: '年龄更大的新秀更成熟，但上限更低。' },
+  'Background / Origin Story': { zh: '出身背景' },
+  'Where you came from shapes your starting intangibles and ceiling.': { zh: '你的出身塑造你的初始心智属性和天花板。' },
+  'Continue →':     { zh: '继续 →' },
+  'NBA Draft Night':{ zh: 'NBA 选秀之夜' },
+  'Enter the Draft':{ zh: '参加选秀' },
+  // global
+  'Back':           { zh: '返回' },
+  'Loading…':       { zh: '加载中…' },
+  'Error':          { zh: '错误' },
+  'vs':             { zh: '对' },
+  'point':          { zh: '分' },
+  'rebounds':       { zh: '篮板' },
+  'assists':        { zh: '助攻' },
+  'No awards yet.': { zh: '暂无荣誉。' },
+  'No games yet':   { zh: '暂无比赛' },
+  'Head to Play Game to get started.': { zh: '前往比赛页面开始。' },
+  'Could not load data.': { zh: '无法加载数据。' },
+};
+function t(s) { return (UI[s] && (UI[s][S.season?.lang] || s)) || s; }
+
 function tickerLine(g) {
   const b = g.box_score || {};
   const flags = [];
   if (g.records_broken?.length) flags.push('🏆RECORD');
   if (g.franchise_record) flags.push('🏛️FRANCHISE');
   if (g.personal_record) flags.push('📈HIGH');
+  if (g.life_intro) flags.push('👥');
   if (g.all_star) flags.push('⭐All-Star');
   if (g.injury) flags.push('🏥'+g.injury.type);
   if (g.passive_trade) flags.push('🔁traded');
@@ -1453,7 +1734,7 @@ function tickerLine(g) {
     <span class="font-bold w-5 shrink-0 ${g.result==='W'?'text-good':'text-bad'}">${g.result}</span>
     <span class="mono text-white w-14 shrink-0">${g.team_score}-${g.opponent_score}</span>
     <span class="text-muted w-9 shrink-0">${g.opponent_abbr}</span>
-    <span class="mono text-gray-300">${b.pts}p ${b.reb}r ${b.ast}a</span>
+    <span class="mono text-gray-300">${b.pts}p ${b.reb}r ${b.ast}a ${b.stl}s ${b.blk}b</span>
     <span class="text-[10px] text-faint flex-1 text-right">${flags.join(' ')}</span>
   </div>`;
 }
@@ -1513,12 +1794,21 @@ async function simBatch(count, btn) {
     const CHUNK = 8;
     let done = 0;
     let paused = null;
-    $('#g-result').innerHTML = `<div class="card p-5">
-      <h3 class="text-sm font-semibold text-gray-300 mb-2">Simulating…</h3>
-      <div class="bar-track h-2 mb-2"><div id="g-batch-bar" class="bar-fill" style="width:0%;background:linear-gradient(90deg,#f59e0b,#fbbf24)"></div></div>
-      <div id="g-ticker" class="space-y-0 max-h-80 overflow-y-auto text-xs"></div>
+    // Pop-up streaming ticker so results aren't buried at the page bottom.
+    document.getElementById('sim-modal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'sim-modal';
+    overlay.className = 'fixed inset-0 z-[65] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4';
+    overlay.innerHTML = `<div class="card p-5 w-full max-w-lg max-h-[80vh] flex flex-col">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-sm font-semibold text-gray-300">Simulating…</h3>
+        <button class="text-muted text-xl leading-none" onclick="document.getElementById('sim-modal').remove()">×</button>
+      </div>
+      <div class="bar-track h-2 mb-2"><div id="sim-bar" class="bar-fill" style="width:0%;background:linear-gradient(90deg,#f59e0b,#fbbf24)"></div></div>
+      <div id="sim-ticker" class="flex-1 overflow-y-auto text-xs space-y-0"></div>
     </div>`;
-    const tickerEl = $('#g-ticker');
+    document.body.appendChild(overlay);
+    const tickerEl = $('#sim-ticker');
     while (done < count) {
       const n = Math.min(CHUNK, count - done);
       const r = await api(`/game/simulate-batch/${S.playerId}?count=${n}`, { method:'POST' });
@@ -1529,7 +1819,7 @@ async function simBatch(count, btn) {
         await sleep(140);
       }
       done += games.length;
-      const bar = $('#g-batch-bar'); if (bar) bar.style.width = Math.min(100, Math.round(done / count * 100)) + '%';
+      const bar = $('#sim-bar'); if (bar) bar.style.width = Math.min(100, Math.round(done / count * 100)) + '%';
       if (r.paused) { paused = r.paused; break; }
       if (!games.length) break; // nothing left (season done or blocked)
     }
@@ -1539,6 +1829,8 @@ async function simBatch(count, btn) {
       showPauseModal(paused);
     } else {
       tickerEl.insertAdjacentHTML('beforeend', `<div class="py-1 text-muted">Done — ${done} game${done===1?'':'s'} simulated.</div>`);
+      tickerEl.scrollTop = tickerEl.scrollHeight;
+      setTimeout(() => document.getElementById('sim-modal')?.remove(), 1500);
     }
     await refreshPlayer(); renderHeader(); await refreshGameProgress();
   } catch(e) { toast('Batch sim failed: '+e.message,'error'); }
@@ -1551,6 +1843,7 @@ async function refreshGameProgress() {
   try {
     const ss = await api(`/player/${S.playerId}/season-stats`);
     const games = ss.games || 0;
+    if (games >= 82) { switchTab('game'); return; } // re-render to surface the Finalize button
     const gnum = $('#g-gamenum');
     if (gnum) gnum.textContent = games >= 82 ? 'Regular Season · Complete (82 games)' : `Regular Season · Game ${games+1} of 82`;
     const gp = $('#g-progress');
@@ -1747,7 +2040,7 @@ async function renderTraining(m) {
     <div class="space-y-5">
       <div class="card p-5">
         <div class="flex items-center justify-between flex-wrap gap-2 mb-1">
-          <h2 class="text-lg font-bold text-white">Offseason Training</h2>
+          <h2 class="text-lg font-bold text-white">${t('Offseason Training')}</h2>
           ${isOffseason
             ? (trained ? '<span class="text-xs px-2 py-1 rounded bg-good/15 text-good">✓ Trained this offseason</span>' : '<span class="text-xs px-2 py-1 rounded bg-accent/15 text-accent">1 slot available</span>')
             : '<span class="text-xs px-2 py-1 rounded bg-bad/15 text-bad">🔒 Locked</span>'}
@@ -1859,7 +2152,7 @@ async function renderCareer(m) {
         </div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Career Totals</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Career Totals')}</h3>
         <div class="grid grid-cols-3 md:grid-cols-6 gap-3">
           ${box('Games',c.career_totals?.games||0,'text-white')}${box('Points',(c.career_totals?.pts||0).toLocaleString(),'text-accent')}
           ${box('Rebounds',(c.career_totals?.reb||0).toLocaleString(),'text-cyber')}${box('Assists',(c.career_totals?.ast||0).toLocaleString(),'text-purple-400')}
@@ -1867,7 +2160,7 @@ async function renderCareer(m) {
         </div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Career Averages</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Career Averages')}</h3>
         <div class="grid grid-cols-3 md:grid-cols-6 gap-3">
           ${box('PPG',c.career_averages?.ppg??'—','text-accent')}${box('RPG',c.career_averages?.rpg??'—','text-cyber')}${box('APG',c.career_averages?.apg??'—','text-purple-400')}
           ${box('SPG',c.career_averages?.spg??'—','text-good')}${box('BPG',c.career_averages?.bpg??'—','text-bad')}${box('MPG',c.career_averages?.mpg??'—','text-white')}
@@ -1881,36 +2174,36 @@ async function renderCareer(m) {
         </div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">📈 Career Trajectory</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Career Trajectory')}</h3>
         <div class="h-64"><canvas id="career-chart"></canvas></div>
       </div>
       ${c.playoff_totals?.games>0?`
       <div class="card p-5 border-accent/20">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏆 Playoff Career</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏆 ${t('Playoff Career')}</h3>
         <div class="grid grid-cols-3 md:grid-cols-6 gap-3">
           ${box('Games',c.playoff_totals.games,'text-white')}${box('PPG',c.playoff_averages?.ppg??'—','text-accent')}${box('RPG',c.playoff_averages?.rpg??'—','text-cyber')}
           ${box('APG',c.playoff_averages?.apg??'—','text-purple-400')}${box('SPG',c.playoff_averages?.spg??'—','text-good')}${box('BPG',c.playoff_averages?.bpg??'—','text-bad')}
         </div>
       </div>`:''}
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Career Highs</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Career Highs')}</h3>
         <div class="grid grid-cols-3 md:grid-cols-5 gap-3">
           ${box('Points',c.career_highs?.pts||0,'text-accent')}${box('Rebounds',c.career_highs?.reb||0,'text-cyber')}
           ${box('Assists',c.career_highs?.ast||0,'text-purple-400')}${box('Steals',c.career_highs?.stl||0,'text-good')}${box('Blocks',c.career_highs?.blk||0,'text-bad')}
         </div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏆 All-Time Records</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏆 ${t('All-Time Records')}</h3>
         <div id="career-records"><p class="text-muted text-sm">Loading…</p></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏅 Awards</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏅 ${t('Awards')}</h3>
         <div class="flex flex-wrap gap-2">
           ${c.awards?.length?c.awards.map(a=>`<span class="px-3 py-1.5 rounded-full text-xs font-semibold bg-accent/10 text-accent border border-accent/30">S${a.season_number} · ${a.award_name}</span>`).join(''):'<span class="text-muted text-sm">No awards yet.</span>'}
         </div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">📜 Career Timeline</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">📜 ${t('Career Timeline')}</h3>
         <div id="career-events"><p class="text-muted text-sm">Loading…</p></div>
       </div>
       ${c.seasons?.length?`<div class="card p-5"><h3 class="text-sm font-semibold text-gray-300 mb-3">Season History</h3>
@@ -1989,29 +2282,29 @@ async function renderOffCourt(m) {
         <div id="oc-contract"><p class="text-muted text-sm">Loading offers…</p></div>
       </div>` : ''}
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🎤 Media</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🎤 ${t('Media')}</h3>
         <div id="oc-media"><p class="text-muted text-sm">Loading…</p></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">💰 Endorsements</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">💰 ${t('Endorsements')}</h3>
         <div id="oc-endorse"></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">👟 Signature Shoe</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">👟 ${t('Signature Shoe')}</h3>
         <div id="oc-shoe"></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🌍 Commercial Tour</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🌍 ${t('Commercial Tour')}</h3>
         <p class="text-xs text-muted mb-3">Spend your offseason growing your global brand instead of training — one or the other.</p>
         <div id="oc-tour"></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🥇 International Play</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🥇 ${t('International Play')}</h3>
         <p class="text-xs text-muted mb-3">In a tournament year, you can represent your country — national glory, but it costs your training slot.</p>
         <div id="oc-intl"></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">📈 Investments</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">📈 ${t('Investments')}</h3>
         <p class="text-xs text-muted mb-3">Wealth: <b class="text-accent">$${S.player.wealth?.toFixed(2)||'0.00'}M</b> · Market: <b class="${marketLabel(S.season?.market).c}">${marketLabel(S.season?.market).t}</b></p>
         <form id="inv-form" class="flex gap-2 mb-4 flex-wrap items-end">
           <select id="inv-asset" class="bg-bg border border-bg-border rounded-lg px-3 py-2 text-sm text-white"><option>Loading assets…</option></select>
@@ -2027,17 +2320,17 @@ async function renderOffCourt(m) {
         <p class="text-[10px] text-faint mt-1">Low trust + big money = a scam risk each offseason.</p>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏠 Lifestyle</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏠 ${t('Lifestyle')}</h3>
         <p class="text-xs text-muted mb-3">How you live burns wealth each offseason but buys fame. Higher tiers cost more — money never stays still.</p>
         <div id="oc-lifestyle"></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">👥 Life & Relationships</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">👥 ${t('Life & Relationships')}</h3>
         <p class="text-xs text-muted mb-3">The people around you. Healthy bonds steady your game; broken ones rattle it.</p>
         <div id="oc-life"></div>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏟️ Locker Room</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">🏟️ ${t('Locker Room')}</h3>
         <p class="text-xs text-muted mb-3">Your teammates and how you gel with them. Wins bring the room together; losses and selfishness fray it.</p>
         <div id="oc-teammates"></div>
       </div>
@@ -2370,9 +2663,9 @@ async function loadLife() {
     const evHtml = events.map(ev => `
       <div class="mt-3 rounded-lg bg-bg-hover border border-bg-border p-3">
         <p class="text-xs text-muted mb-1">${ev.intro ? '✨ New connection' : `${typeIcon[ev.type]||'👤'} ${esc(ev.name||'')}`}</p>
-        <p class="text-white text-sm font-medium mb-2">"${esc(ev.event.question)}"</p>
+        <p class="text-white text-sm font-medium mb-2">"${esc(pick(ev.event.question, S.season?.lang))}"</p>
         <div class="space-y-1.5">
-          ${ev.event.choices.map((c,i)=>`<button class="w-full text-left card card-hover p-2.5 text-sm" onclick="respondLife('${ev.event.id}',${i},${ev.relationship_id??'null'})">${esc(c.text)}</button>`).join('')}
+          ${ev.event.choices.map((c,i)=>`<button class="w-full text-left card card-hover p-2.5 text-sm" onclick="respondLife('${ev.event.id}',${i},${ev.relationship_id??'null'})">${esc(pick(c.text, S.season?.lang))}</button>`).join('')}
         </div>
       </div>`).join('');
 
@@ -2523,7 +2816,7 @@ function renderSaves(m) {
         </form>
       </div>
       <div class="card p-5">
-        <h3 class="text-sm font-semibold text-gray-300 mb-3">Saved Games</h3>
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Saved Games')}</h3>
         <div id="saves-list"></div>
       </div>
       <div class="card p-5">

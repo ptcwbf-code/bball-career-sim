@@ -135,7 +135,7 @@ migrateColumns('season_summaries', {
   p_topg: 'REAL DEFAULT 0', p_mpg: 'REAL DEFAULT 0', p_fg_pct: 'REAL DEFAULT 0',
   p_tp_pct: 'REAL DEFAULT 0', p_ft_pct: 'REAL DEFAULT 0',
 });
-migrateColumns('league_state', { intl_tournament: 'TEXT', game_mode: "TEXT DEFAULT 'classic'" });
+migrateColumns('league_state', { intl_tournament: 'TEXT', game_mode: "TEXT DEFAULT 'classic'", lang: "TEXT DEFAULT 'en'" });
 
 // ------------------------------------------------------------
 // Helpers
@@ -173,6 +173,12 @@ function httpError(status, detail) { return new HttpError(status, detail); }
 function round1(v) { return Math.round(v * 10) / 10; }
 function round2(v) { return Math.round(v * 100) / 100; }
 function round3(v) { return Math.round(v * 1000) / 1000; }
+
+// Pick a localized string from an {en, zh} pair (or pass through a plain string).
+function pick(v, lang) {
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('en' in v || 'zh' in v)) return v[lang] || v.en || '';
+  return v;
+}
 
 // ------------------------------------------------------------
 // Team data
@@ -393,6 +399,12 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
   adj('lateral_quickness', -hDev * 6);
   adj('strength', wDev * 14 - hDev * 6);        // weight relative to height → strength
   adj('core_stability', wDev * 6);
+  // Position shapes the defensive archetype: bigs protect the rim but struggle on
+  // the perimeter; guards chase ball-handlers but can't challenge at the rim.
+  const pd = POSITION_DEFENSE[position] || { blk: 1, stl: 1 };
+  adj('rim_protection', Math.round((pd.blk - 1) * 18));    // C(1.8)→+14, PG(0.12)→−16
+  adj('perimeter_defense', Math.round((1 - pd.blk) * 10)); // C→−8, PG→+9
+  adj('steal', Math.round((pd.stl - 1) * 12));             // PG(1.6)→+7, C(0.45)→−7
 
   const growth = rollGrowthArchetype(bg, attrs.work_ethic ?? 50);
   const g = (k, d) => attrs[k] ?? d;
@@ -632,11 +644,13 @@ function calculateMinutes(player, overall, isPlayoff = false, fatiguePenalty = 0
   if (player.load_management) mpg -= 8;
   if (isPlayoff) mpg += 4;
   mpg -= fatiguePenalty * 10;
+  // Form shifts minutes: a hot hand earns more run, a cold spell loses it.
+  mpg += (player.hot_streak || 0) * 1.2 + (player.cold_streak || 0) * 1.2;
   // Consistency steadies minutes: high-consistency players play near their base
   // every night; low-consistency players see wider swings.
   const consistency = consistencyRating(player);
-  mpg += randRange(-3, 3) * (1 - consistency / 100 * 0.6);
-  return round1(clamp(mpg, 6, 42));
+  mpg += randRange(-5, 5) * (1 - consistency / 100 * 0.6);
+  return round1(clamp(mpg, 5, 42));
 }
 
 // Pre-game tactics: the player picks a defensive scheme and an offensive pace.
@@ -825,7 +839,7 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   // (each possession is otherwise an independent, high-variance coin flip).
   const expTeam = clamp(team.off + (team.off - opp.def) * 0.4 + (home ? 2.5 : 0), 85, 135);
   const expOpp = clamp(opp.off + (opp.off - team.def) * 0.4 + (home ? -2.5 : 0), 85, 135);
-  const STAB = 0.4;
+  const STAB = 0.55;
   teamScore = Math.round(teamScore * (1 - STAB) + expTeam * STAB);
   oppScore = Math.round(oppScore * (1 - STAB) + expOpp * STAB);
   const tRaw = qT.reduce((a, b) => a + b, 0) || 1;
@@ -966,10 +980,11 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
       franchiseRecord = true;
     }
   }
+  const lifeIntro = hasIntroLifeEvent(playerId);
 
   return { game_number: gameNumber, opponent: opp.name, opponent_abbr: opp.abbr, result, is_home: home ? 1 : 0,
            overtime: overtime > 0 ? overtime : null,
-           team_score: teamScore, opponent_score: oppScore, minutes, box_score: box, advanced: adv, plus_minus: plusMinus, records_broken: recordsBroken, personal_record: personalRecord, franchise_record: franchiseRecord,
+           team_score: teamScore, opponent_score: oppScore, minutes, box_score: box, advanced: adv, plus_minus: plusMinus, records_broken: recordsBroken, personal_record: personalRecord, franchise_record: franchiseRecord, life_intro: lifeIntro,
            quarters: { team: qT, opp: qO }, team_box: teamBox, opp_box: oppBox,
            fatigue: round1(newFatigue), injury: newInjStatus ? { type: newInjStatus, games: newInjGames } : null,
            fouled_out: fouledOut,
@@ -1787,9 +1802,10 @@ function maybeCareerEvent(playerId) {
   parts.push("updated_at=datetime('now')");
   vals.push(playerId);
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
+  const lang = getLeagueState(playerId).lang || 'en';
   db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,'event',?)")
-    .run(playerId, state.current_season, ev.title + ' — ' + ev.text);
-  return { type: 'event', event: { id: ev.id, title: ev.title, text: ev.text, tone: ev.tone, changes } };
+    .run(playerId, state.current_season, pick(ev.title, 'en') + ' — ' + pick(ev.text, 'en'));
+  return { type: 'event', event: { id: ev.id, title: pick(ev.title, lang), text: pick(ev.text, lang), tone: ev.tone, changes } };
 }
 
 // All-Star selection: a mid-season milestone with a small fame/respect bump.
@@ -1870,21 +1886,47 @@ function maybeAllStarWeekend(playerId) {
   return { allstar_weekend: true };
 }
 
-function resolveAllStarWeekend(playerId, choice) {
+// All-Star weekend events — the player picks specific moves/spots; harder ones
+// pay more but are less likely to land (gated by body/physical attributes).
+const DUNK_ACTIONS = [
+  { id: 'windmill', label: 'Windmill', icon: '🌪️', desc: 'A clean one-handed windmill.', difficulty: 1.1, attr: 'vertical_jump' },
+  { id: '360', label: '360 Spin', icon: '🌀', desc: 'A full spin in the air before the throwdown.', difficulty: 1.6, attr: 'vertical_jump' },
+  { id: 'poster', label: 'Jump Over a Person', icon: '🧍', desc: 'Catch a lob over a crouching mascot.', difficulty: 2.4, attr: 'finishing' },
+];
+const THREE_SPOTS = [
+  { id: 'corner', label: 'Corner', icon: '📐', desc: 'The short corner three.', difficulty: 0.8 },
+  { id: 'wing', label: 'Wing', icon: '🎯', desc: 'The 45-degree wing.', difficulty: 1.0 },
+  { id: 'top', label: 'Top of the Key', icon: '🏹', desc: 'The deep arc three.', difficulty: 1.3 },
+];
+
+function resolveAllStarWeekend(playerId, choice, action) {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
   if (!p.pending_weekend) throw httpError(400, 'No pending All-Star Weekend decision.');
-  let result = { choice, message: 'You sat out the weekend events.' };
+  let result;
   if (choice === 'dunk') {
-    const vert = p.vertical_jump ?? 45;
-    const clout = clamp(Math.round((vert - 55) / 5), 0, 6);
-    db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+2), injury_risk=MIN(100,injury_risk+3) WHERE id=?').run(clout, clout, playerId);
-    result = { choice, message: `You entered the dunk contest — a ${clout} clout/fame bump (and a little soreness).`, clout };
+    const act = DUNK_ACTIONS.find(a => a.id === action) || DUNK_ACTIONS[0];
+    const attr = p[act.attr] ?? 50;
+    const successProb = clamp(attr / 100 * (1.4 - act.difficulty * 0.3), 0.15, 0.92);
+    const success = Math.random() < successProb;
+    const clout = success ? Math.max(2, Math.round(act.difficulty * 6)) : 1;
+    db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+?), injury_risk=MIN(100,injury_risk+?) WHERE id=?')
+      .run(clout, clout, success ? 3 : 1, success ? 3 : 2, playerId);
+    result = { choice, action: act.label, success, clout,
+      message: success ? `You threw down the ${act.label} and the judges went wild — a ${clout} clout/fame bump.`
+                       : `You missed the ${act.label} and the crowd winced — a small ${clout} clout bump for showing up.` };
   } else if (choice === 'three') {
+    const spot = THREE_SPOTS.find(s => s.id === action) || THREE_SPOTS[0];
     const tp = p.catch_shoot_3pt ?? 35;
-    const clout = clamp(Math.round((tp - 55) / 5), 0, 6);
+    const makeProb = clamp(tp / 100 / spot.difficulty, 0.1, 0.9);
+    let made = 0;
+    for (let i = 0; i < 5; i++) if (Math.random() < makeProb) made++;
+    const clout = clamp(Math.round(made * 1.5), 0, 8);
     db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+1) WHERE id=?').run(clout, clout, playerId);
-    result = { choice, message: `You entered the three-point contest — a ${clout} clout/fame bump.`, clout };
+    result = { choice, action: spot.label, made, clout,
+      message: `From the ${spot.label}, you hit ${made}/5 — a ${clout} clout/fame bump.` };
+  } else {
+    result = { choice, message: 'You sat out the weekend events.' };
   }
   db.prepare('UPDATE players SET pending_weekend=0 WHERE id=?').run(playerId);
   return result;
@@ -3024,141 +3066,141 @@ function redeemInvestment(playerId, investmentId) {
 }
 
 const CAREER_EVENTS = [
-  { id: 'charity_event', title: 'Community Hero', tone: 'positive', weight: 3,
-    text: 'A charity clinic you ran quietly blew up locally. The city loves you for it.',
+  { id: 'charity_event', title: { en: 'Community Hero', zh: '社区英雄' }, tone: 'positive', weight: 3,
+    text: { en: 'A charity clinic you ran quietly blew up locally. The city loves you for it.', zh: '你默默办的慈善训练营在当地火了。这座城市因此更爱你。' },
     effects: { fan_base: [2, 6], morale: [2, 5], clout: [0, 2] } },
-  { id: 'shoe_launch', title: 'Signature Shoe Buzz', tone: 'positive', weight: 2, min_experience: 2,
-    text: 'Rumors of your own signature shoe are swirling. Your brand is rising.',
+  { id: 'shoe_launch', title: { en: 'Signature Shoe Buzz', zh: '签名鞋传闻' }, tone: 'positive', weight: 2, min_experience: 2,
+    text: { en: 'Rumors of your own signature shoe are swirling. Your brand is rising.', zh: '关于你签名鞋的传闻四起，你的个人品牌在上升。' },
     effects: { clout: [2, 6], fan_base: [1, 4], wealth: [0, 0] } },
-  { id: 'family_emergency', title: 'Family Emergency', tone: 'negative', weight: 2,
-    text: 'A family emergency pulled you away for a few days. Hard to focus on ball.',
+  { id: 'family_emergency', title: { en: 'Family Emergency', zh: '家庭突发状况' }, tone: 'negative', weight: 2,
+    text: { en: 'A family emergency pulled you away for a few days. Hard to focus on ball.', zh: '家里出了急事，你离开了好几天。很难专注打球。' },
     effects: { morale: [-12, -4] }, attr_effects: { composure: [-3, -1] } },
-  { id: 'coach_feud', title: 'Locker-Room Tension', tone: 'negative', weight: 2, min_experience: 1,
-    text: 'You and the coaching staff butted heads over your role. Teammates noticed.',
+  { id: 'coach_feud', title: { en: 'Locker-Room Tension', zh: '更衣室紧张' }, tone: 'negative', weight: 2, min_experience: 1,
+    text: { en: 'You and the coaching staff butted heads over your role. Teammates noticed.', zh: '你和教练组因为你的角色起了冲突，队友们都看在了眼里。' },
     effects: { chemistry: [-12, -3], morale: [-8, -2] }, attr_effects: { composure: [-2, -1] } },
-  { id: 'fan_feud', title: 'Online Backlash', tone: 'negative', weight: 2,
-    text: 'A clip of you out of context went viral. Social media is piling on.',
+  { id: 'fan_feud', title: { en: 'Online Backlash', zh: '网络反噬' }, tone: 'negative', weight: 2,
+    text: { en: 'A clip of you out of context went viral. Social media is piling on.', zh: '一段断章取义的视频火了，社交媒体上骂声一片。' },
     effects: { fan_base: [-6, -1], morale: [-5, -1] } },
-  { id: 'breakout_practice', title: 'Breakthrough in Practice', tone: 'positive', weight: 3,
-    text: 'Something clicked in a late-night shootaround. Your game feels sharper.',
+  { id: 'breakout_practice', title: { en: 'Breakthrough in Practice', zh: '训练突破' }, tone: 'positive', weight: 3,
+    text: { en: 'Something clicked in a late-night shootaround. Your game feels sharper.', zh: '深夜加练时突然开窍了，你的比赛感觉更锐利了。' },
     attr_effects: { work_ethic: [0, 1] } },
-  { id: 'mentor_wisdom', title: 'A Veteran Takes You Under', tone: 'positive', weight: 2,
-    text: 'A grizzled veteran spent the week teaching you the nuances of the game.',
+  { id: 'mentor_wisdom', title: { en: 'A Veteran Takes You Under', zh: '老将提携' }, tone: 'positive', weight: 2,
+    text: { en: 'A grizzled veteran spent the week teaching you the nuances of the game.', zh: '一位身经百战的老将用了一周时间，教你比赛里的那些微妙之处。' },
     effects: { morale: [1, 4] }, attr_effects: { bbiq: [1, 2], leadership: [1, 2] } },
-  { id: 'nutrition_program', title: 'Body Transformation', tone: 'positive', weight: 2,
-    text: 'A new nutritionist fixed your diet. You feel lighter and stronger.',
+  { id: 'nutrition_program', title: { en: 'Body Transformation', zh: '身体蜕变' }, tone: 'positive', weight: 2,
+    text: { en: 'A new nutritionist fixed your diet. You feel lighter and stronger.', zh: '一位新的营养师调整了你的饮食，你感觉更轻盈也更强壮了。' },
     attr_effects: { stamina: [1, 3], durability: [1, 2] } },
-  { id: 'viral_moment', title: 'Viral Highlight', tone: 'positive', weight: 3,
-    text: 'A highlight of yours is everywhere. Your name is trending.',
+  { id: 'viral_moment', title: { en: 'Viral Highlight', zh: '爆红高光' }, tone: 'positive', weight: 3,
+    text: { en: 'A highlight of yours is everywhere. Your name is trending.', zh: '你的一个高光瞬间传遍全网，你的名字上了热搜。' },
     effects: { clout: [1, 5], fan_base: [1, 5] } },
-  { id: 'league_fine', title: 'League Fine', tone: 'negative', weight: 2,
-    text: 'The league fined you for a postgame outburst. Costly, and a bad look.',
+  { id: 'league_fine', title: { en: 'League Fine', zh: '联盟罚款' }, tone: 'negative', weight: 2,
+    text: { en: 'The league fined you for a postgame outburst. Costly, and a bad look.', zh: '联盟因为你赛后的失态罚了你款。代价不小，观感也差。' },
     effects: { wealth: [-3, -1], morale: [-6, -1], clout: [-2, 0] } },
-  { id: 'charity_backfire', title: 'Charity Scandal', tone: 'negative', weight: 1,
-    text: 'A charity you endorsed was exposed for mismanaging funds. Guilt by association.',
+  { id: 'charity_backfire', title: { en: 'Charity Scandal', zh: '慈善丑闻' }, tone: 'negative', weight: 1,
+    text: { en: 'A charity you endorsed was exposed for mismanaging funds. Guilt by association.', zh: '你背书的慈善机构被曝出资金管理混乱，你被牵连了。' },
     effects: { fan_base: [-5, -1], clout: [-4, -1] } },
-  { id: 'endorsement_break', title: 'Endorsement Falls Through', tone: 'negative', weight: 2, min_experience: 1,
-    text: 'A major endorsement deal collapsed at the last minute.',
+  { id: 'endorsement_break', title: { en: 'Endorsement Falls Through', zh: '代言告吹' }, tone: 'negative', weight: 2, min_experience: 1,
+    text: { en: 'A major endorsement deal collapsed at the last minute.', zh: '一单重要代言在最后一刻谈崩了。' },
     effects: { wealth: [-5, -2], morale: [-5, -1] } },
 ];
 
 const MEDIA_SCENARIOS = [
-  { id: 'postgame_loss', trigger: 'after_loss', question: "Tough loss tonight. The fans want to hear from you.",
+  { id: 'postgame_loss', trigger: 'after_loss', question: { en: "Tough loss tonight. The fans want to hear from you.", zh: "今晚输得憋屈。球迷想听听你的说法。" },
     choices: [
-      { text: '"This one\'s on me. I need to step up."', tone: 'accountable', fan_base: [1, 6], clout: [-1, 3], chemistry: [1, 5], mvp: [0, 2] },
-      { text: '"We didn\'t execute as a group. We\'ll fix it."', tone: 'diplomatic', fan_base: [-3, 2], clout: [-2, 1], chemistry: [-6, -1], mvp: [-4, 0] },
-      { text: '"Next question. We\'re on to the next one."', tone: 'dismissive', fan_base: [-4, 0], clout: [0, 3], chemistry: [-3, 1], mvp: [-2, 1] } ] },
-  { id: 'postgame_win', trigger: 'after_win', question: "Big win tonight. What's clicking for you right now?",
+      { text: { en: '"This one\'s on me. I need to step up."', zh: '"这场怪我，我得站出来。"' }, tone: 'accountable', fan_base: [1, 6], clout: [-1, 3], chemistry: [1, 5], mvp: [0, 2] },
+      { text: { en: '"We didn\'t execute as a group. We\'ll fix it."', zh: '"我们整体没执行好，会改的。"' }, tone: 'diplomatic', fan_base: [-3, 2], clout: [-2, 1], chemistry: [-6, -1], mvp: [-4, 0] },
+      { text: { en: '"Next question. We\'re on to the next one."', zh: '"下一个问题。我们翻篇了。"' }, tone: 'dismissive', fan_base: [-4, 0], clout: [0, 3], chemistry: [-3, 1], mvp: [-2, 1] } ] },
+  { id: 'postgame_win', trigger: 'after_win', question: { en: "Big win tonight. What's clicking for you right now?", zh: "今晚大胜。你现在的状态为什么这么好？" },
     choices: [
-      { text: '"It\'s all about the guys around me. They make it easy."', tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] },
-      { text: '"I\'m just doing what I do. Nobody can guard me right now."', tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
-      { text: '"We got lucky with a few calls. Long season, staying humble."', tone: 'humble', fan_base: [1, 4], clout: [1, 4], chemistry: [1, 4], mvp: [2, 6] } ] },
-  { id: 'mvp_campaign', trigger: 'mid_season', question: "You're in the MVP conversation. How do you feel about that?",
+      { text: { en: '"It\'s all about the guys around me. They make it easy."', zh: '"全靠身边的队友，他们让我打得很轻松。"' }, tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] },
+      { text: { en: '"I\'m just doing what I do. Nobody can guard me right now."', zh: '"我就是做自己，现在没人防得住我。"' }, tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
+      { text: { en: '"We got lucky with a few calls. Long season, staying humble."', zh: '"我们占了几个判罚的便宜。赛季还长，保持谦逊。"' }, tone: 'humble', fan_base: [1, 4], clout: [1, 4], chemistry: [1, 4], mvp: [2, 6] } ] },
+  { id: 'mvp_campaign', trigger: 'mid_season', question: { en: "You're in the MVP conversation. How do you feel about that?", zh: "你进入了 MVP 的讨论。对此你怎么看？" },
     choices: [
-      { text: '"It\'s an honor just to be mentioned alongside those names."', tone: 'humble', fan_base: [1, 4], clout: [1, 5], chemistry: [1, 4], mvp: [3, 8] },
-      { text: '"My numbers speak for themselves."', tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
-      { text: '"We\'re winning games. That\'s all I care about."', tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] } ] },
-  { id: 'trade_rumors', trigger: 'random', question: "Rumors are swirling that you want out. Any truth to that?",
+      { text: { en: '"It\'s an honor just to be mentioned alongside those names."', zh: '"能和那些名字并列被提及，已经是荣誉。"' }, tone: 'humble', fan_base: [1, 4], clout: [1, 5], chemistry: [1, 4], mvp: [3, 8] },
+      { text: { en: '"My numbers speak for themselves."', zh: '"我的数据自己会说话。"' }, tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
+      { text: { en: '"We\'re winning games. That\'s all I care about."', zh: '"我们在赢球，这才是我在乎的。"' }, tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] } ] },
+  { id: 'trade_rumors', trigger: 'random', question: { en: "Rumors are swirling that you want out. Any truth to that?", zh: "有传闻说你想离开球队。这是真的吗？" },
     choices: [
-      { text: '"I\'m committed to this city and this team."', tone: 'loyal', fan_base: [3, 8], clout: [-4, 0], chemistry: [3, 8], mvp: [0, 0] },
-      { text: '"I\'m focused on basketball, not rumors."', tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 0] },
-      { text: '"I want to win championships — wherever that takes me."', tone: 'ambitious', fan_base: [-10, -2], clout: [2, 7], chemistry: [-12, -3], mvp: [-3, 1] } ] },
-  { id: 'social_media', trigger: 'random', question: "Old posts of yours have resurfaced online. How do you respond?",
+      { text: { en: '"I\'m committed to this city and this team."', zh: '"我忠于这座城市和这支球队。"' }, tone: 'loyal', fan_base: [3, 8], clout: [-4, 0], chemistry: [3, 8], mvp: [0, 0] },
+      { text: { en: '"I\'m focused on basketball, not rumors."', zh: '"我只专注篮球，不理会流言。"' }, tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 0] },
+      { text: { en: '"I want to win championships — wherever that takes me."', zh: '"我想拿总冠军——不管这需要我去哪。"' }, tone: 'ambitious', fan_base: [-10, -2], clout: [2, 7], chemistry: [-12, -3], mvp: [-3, 1] } ] },
+  { id: 'social_media', trigger: 'random', question: { en: "Old posts of yours have resurfaced online. How do you respond?", zh: "你以前的旧帖子在网上被翻了出来。你怎么回应？" },
     choices: [
-      { text: '"I was young. I\'ve grown a lot since then."', tone: 'sincere', fan_base: [-1, 3], clout: [0, 3], chemistry: [0, 2], mvp: [0, 2] },
-      { text: '"People are digging for drama. I\'m not engaging."', tone: 'defensive', fan_base: [-5, 0], clout: [-3, 1], chemistry: [-2, 1], mvp: [-5, 0] },
-      { text: 'Stay silent. Let it blow over.', tone: 'silent', fan_base: [-3, 1], clout: [-1, 1], chemistry: [0, 0], mvp: [-4, 0] } ] },
-  { id: 'rookie_wall', trigger: 'mid_season', question: "The rookie wall is real. How are you handling the grind of an 82-game season?",
+      { text: { en: '"I was young. I\'ve grown a lot since then."', zh: '"那时候我还年轻，现在成长了很多。"' }, tone: 'sincere', fan_base: [-1, 3], clout: [0, 3], chemistry: [0, 2], mvp: [0, 2] },
+      { text: { en: '"People are digging for drama. I\'m not engaging."', zh: '"有人就想挖料。我不接招。"' }, tone: 'defensive', fan_base: [-5, 0], clout: [-3, 1], chemistry: [-2, 1], mvp: [-5, 0] },
+      { text: { en: 'Stay silent. Let it blow over.', zh: '保持沉默，让它自己过去。' }, tone: 'silent', fan_base: [-3, 1], clout: [-1, 1], chemistry: [0, 0], mvp: [-4, 0] } ] },
+  { id: 'rookie_wall', trigger: 'mid_season', question: { en: "The rookie wall is real. How are you handling the grind of an 82-game season?", zh: "新秀墙是真的存在。你是怎么熬过 82 场常规赛的？" },
     choices: [
-      { text: '"The veterans warned me. I\'m leaning on my routine."', tone: 'focused', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 3], mvp: [0, 1] },
-      { text: '"Wall? I don\'t feel one. I\'m built for this."', tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-3, 0], mvp: [2, 6] },
-      { text: '"Honestly, my body hurts every day. But I\'ll keep showing up."', tone: 'candid', fan_base: [1, 5], clout: [0, 3], chemistry: [0, 2], mvp: [-1, 2] } ] },
-  { id: 'all_star_snub', trigger: 'mid_season', question: "You missed the All-Star cut. That had to sting.",
+      { text: { en: '"The veterans warned me. I\'m leaning on my routine."', zh: '"老将们提醒过我。我靠规律作息撑着。"' }, tone: 'focused', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 3], mvp: [0, 1] },
+      { text: { en: '"Wall? I don\'t feel one. I\'m built for this."', zh: '"新秀墙？我没感觉到。我就是为这个而生的。"' }, tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-3, 0], mvp: [2, 6] },
+      { text: { en: '"Honestly, my body hurts every day. But I\'ll keep showing up."', zh: '"说实话，我每天浑身都疼。但我还是会坚持上场。"' }, tone: 'candid', fan_base: [1, 5], clout: [0, 3], chemistry: [0, 2], mvp: [-1, 2] } ] },
+  { id: 'all_star_snub', trigger: 'mid_season', question: { en: "You missed the All-Star cut. That had to sting.", zh: "你落选了全明星。这一定很扎心。" },
     choices: [
-      { text: '"I\'m using it as fuel. They\'ll remember this."', tone: 'defiant', fan_base: [1, 5], clout: [2, 6], chemistry: [-1, 2], mvp: [3, 8] },
-      { text: '"There are a lot of great players. I\'ll keep working."', tone: 'humble', fan_base: [2, 5], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] },
-      { text: '"The voting is a joke. I should\'ve been in."', tone: 'dismissive', fan_base: [-5, 0], clout: [0, 3], chemistry: [-4, 0], mvp: [-2, 2] } ] },
-  { id: 'contract_talk', trigger: 'mid_season', question: "Your contract is coming up. Any message for the front office?",
+      { text: { en: '"I\'m using it as fuel. They\'ll remember this."', zh: '"我把这当作燃料，他们会记住的。"' }, tone: 'defiant', fan_base: [1, 5], clout: [2, 6], chemistry: [-1, 2], mvp: [3, 8] },
+      { text: { en: '"There are a lot of great players. I\'ll keep working."', zh: '"优秀的球员很多，我会继续努力。"' }, tone: 'humble', fan_base: [2, 5], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] },
+      { text: { en: '"The voting is a joke. I should\'ve been in."', zh: '"投票就是个笑话，我本该入选的。"' }, tone: 'dismissive', fan_base: [-5, 0], clout: [0, 3], chemistry: [-4, 0], mvp: [-2, 2] } ] },
+  { id: 'contract_talk', trigger: 'mid_season', question: { en: "Your contract is coming up. Any message for the front office?", zh: "你的合同快到期了。有什么话想对管理层说？" },
     choices: [
-      { text: '"I let my agent handle that. I\'m focused on winning."', tone: 'neutral', fan_base: [-1, 2], clout: [0, 2], chemistry: [0, 2], mvp: [0, 0] },
-      { text: '"They know what I\'m worth. Pay me like a star."', tone: 'ambitious', fan_base: [-4, 1], clout: [1, 5], chemistry: [-6, -1], mvp: [-2, 2] },
-      { text: '"I want to be here long-term and build something."', tone: 'loyal', fan_base: [2, 7], clout: [-2, 1], chemistry: [2, 6], mvp: [0, 2] } ] },
-  { id: 'coach_criticism', trigger: 'after_loss', question: "Your coach called out your effort after the game. Your response?",
+      { text: { en: '"I let my agent handle that. I\'m focused on winning."', zh: '"这些交给我经纪人，我只专注赢球。"' }, tone: 'neutral', fan_base: [-1, 2], clout: [0, 2], chemistry: [0, 2], mvp: [0, 0] },
+      { text: { en: '"They know what I\'m worth. Pay me like a star."', zh: '"他们知道我的价值，按球星的标准给我。"' }, tone: 'ambitious', fan_base: [-4, 1], clout: [1, 5], chemistry: [-6, -1], mvp: [-2, 2] },
+      { text: { en: '"I want to be here long-term and build something."', zh: '"我想长期留在这里，一起建立点什么。"' }, tone: 'loyal', fan_base: [2, 7], clout: [-2, 1], chemistry: [2, 6], mvp: [0, 2] } ] },
+  { id: 'coach_criticism', trigger: 'after_loss', question: { en: "Your coach called out your effort after the game. Your response?", zh: "赛后教练点名批评了你的态度。你怎么回应？" },
     choices: [
-      { text: '"He\'s right. I have to be better. Point taken."', tone: 'accountable', fan_base: [1, 5], clout: [-1, 2], chemistry: [2, 6], mvp: [0, 2] },
-      { text: '"He can coach. I\'ll play my game."', tone: 'defiant', fan_base: [0, 3], clout: [2, 5], chemistry: [-8, -2], mvp: [-1, 2] },
-      { text: '"I\'m not getting into a war through the media."', tone: 'diplomatic', fan_base: [-2, 1], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
-  { id: 'teammate_chemistry', trigger: 'after_win', question: "Your teammate had a career night. How do you celebrate it?",
+      { text: { en: '"He\'s right. I have to be better. Point taken."', zh: '"他说得对，我得更好。我接受。"' }, tone: 'accountable', fan_base: [1, 5], clout: [-1, 2], chemistry: [2, 6], mvp: [0, 2] },
+      { text: { en: '"He can coach. I\'ll play my game."', zh: '"他当他的教练，我打我的球。"' }, tone: 'defiant', fan_base: [0, 3], clout: [2, 5], chemistry: [-8, -2], mvp: [-1, 2] },
+      { text: { en: '"I\'m not getting into a war through the media."', zh: '"我不想通过媒体打嘴仗。"' }, tone: 'diplomatic', fan_base: [-2, 1], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
+  { id: 'teammate_chemistry', trigger: 'after_win', question: { en: "Your teammate had a career night. How do you celebrate it?", zh: "队友打出了生涯之夜。你怎么为他庆祝？" },
     choices: [
-      { text: '"That\'s my guy. I\'m happier for him than for myself."', tone: 'team-first', fan_base: [2, 6], clout: [0, 3], chemistry: [4, 9], mvp: [1, 4] },
-      { text: '"He gets open looks because of me. Happy to help."', tone: 'confident', fan_base: [-2, 2], clout: [1, 4], chemistry: [-6, -1], mvp: [1, 5] },
-      { text: '"We feed off each other. Nights like this are contagious."', tone: 'diplomatic', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 4], mvp: [0, 2] } ] },
-  { id: 'playoff_pressure', trigger: 'playoffs', question: "The whole city is watching this series. Feeling the pressure?",
+      { text: { en: '"That\'s my guy. I\'m happier for him than for myself."', zh: '"那是我兄弟，我比他还高兴。"' }, tone: 'team-first', fan_base: [2, 6], clout: [0, 3], chemistry: [4, 9], mvp: [1, 4] },
+      { text: { en: '"He gets open looks because of me. Happy to help."', zh: '"他那些空位都是我创造的，我很乐意。"' }, tone: 'confident', fan_base: [-2, 2], clout: [1, 4], chemistry: [-6, -1], mvp: [1, 5] },
+      { text: { en: '"We feed off each other. Nights like this are contagious."', zh: '"我们互相成就，这样的夜晚是会传染的。"' }, tone: 'diplomatic', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 4], mvp: [0, 2] } ] },
+  { id: 'playoff_pressure', trigger: 'playoffs', question: { en: "The whole city is watching this series. Feeling the pressure?", zh: "整座城市都在盯着这轮系列赛。有压力吗？" },
     choices: [
-      { text: '"Pressure is a privilege. This is what we live for."', tone: 'leader', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [3, 7] },
-      { text: '"I\'ve been here before. I\'m not scared."', tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-2, 1], mvp: [3, 8] },
-      { text: '"Honestly, I couldn\'t sleep last night. But I\'ll be ready."', tone: 'candid', fan_base: [0, 4], clout: [-1, 2], chemistry: [1, 3], mvp: [0, 3] } ] },
-  { id: 'finals_media', trigger: 'playoffs', question: "You're on the biggest stage. What would a ring mean to you?",
+      { text: { en: '"Pressure is a privilege. This is what we live for."', zh: '"压力是一种特权，这正是我们为之而战的。"' }, tone: 'leader', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [3, 7] },
+      { text: { en: '"I\'ve been here before. I\'m not scared."', zh: '"我经历过这些，我不怕。"' }, tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-2, 1], mvp: [3, 8] },
+      { text: { en: '"Honestly, I couldn\'t sleep last night. But I\'ll be ready."', zh: '"说实话，我昨晚没睡着。但我会准备好。"' }, tone: 'candid', fan_base: [0, 4], clout: [-1, 2], chemistry: [1, 3], mvp: [0, 3] } ] },
+  { id: 'finals_media', trigger: 'playoffs', question: { en: "You're on the biggest stage. What would a ring mean to you?", zh: "你站在了最大的舞台。一枚总冠军戒指对你意味着什么？" },
     choices: [
-      { text: '"Everything. I\'ve dreamed of this since I was a kid."', tone: 'sincere', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [2, 6] },
-      { text: '"It\'s just basketball. I\'ll play my game."', tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 2] },
-      { text: '"We\'re one win closer. Ask me after we finish the job."', tone: 'focused', fan_base: [1, 4], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] } ] },
-  { id: 'retirement_question', trigger: 'random', question: "You're not getting any younger. How much longer do you want to play?",
+      { text: { en: '"Everything. I\'ve dreamed of this since I was a kid."', zh: '"意味着一切。我从小就开始做这个梦。"' }, tone: 'sincere', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [2, 6] },
+      { text: { en: '"It\'s just basketball. I\'ll play my game."', zh: '"就是打篮球而已，我照常打。"' }, tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 2] },
+      { text: { en: '"We\'re one win closer. Ask me after we finish the job."', zh: '"我们离目标又近了一步，等拿下再问我。"' }, tone: 'focused', fan_base: [1, 4], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] } ] },
+  { id: 'retirement_question', trigger: 'random', question: { en: "You're not getting any younger. How much longer do you want to play?", zh: "岁月不饶人。你还想再打多久？" },
     choices: [
-      { text: '"Until they rip the jersey off me. I love this game."', tone: 'proud', fan_base: [2, 6], clout: [1, 4], chemistry: [2, 5], mvp: [0, 3] },
-      { text: '"I\'ll know when it\'s time. It\'s not time yet."', tone: 'candid', fan_base: [0, 3], clout: [0, 2], chemistry: [0, 2], mvp: [0, 1] },
-      { text: '"A few more rings and I\'m gone. Legacy matters."', tone: 'ambitious', fan_base: [-3, 2], clout: [1, 5], chemistry: [-4, 0], mvp: [0, 3] } ] },
-  { id: 'load_management_q', trigger: 'mid_season', question: "Fans are upset you sat out a nationally televised game. Defend yourself.",
+      { text: { en: '"Until they rip the jersey off me. I love this game."', zh: '"打到他们把我的球衣扒下来为止，我爱这项运动。"' }, tone: 'proud', fan_base: [2, 6], clout: [1, 4], chemistry: [2, 5], mvp: [0, 3] },
+      { text: { en: '"I\'ll know when it\'s time. It\'s not time yet."', zh: '"该退的时候我会知道，现在还不到时候。"' }, tone: 'candid', fan_base: [0, 3], clout: [0, 2], chemistry: [0, 2], mvp: [0, 1] },
+      { text: { en: '"A few more rings and I\'m gone. Legacy matters."', zh: '"再拿几枚戒指我就走，遗产很重要。"' }, tone: 'ambitious', fan_base: [-3, 2], clout: [1, 5], chemistry: [-4, 0], mvp: [0, 3] } ] },
+  { id: 'load_management_q', trigger: 'mid_season', question: { en: "Fans are upset you sat out a nationally televised game. Defend yourself.", zh: "球迷因为你缺席一场全国直播比赛而不满。为自己辩护一下吧。" },
     choices: [
-      { text: '"Long-term health wins rings. That\'s the priority."', tone: 'focused', fan_base: [-2, 2], clout: [0, 2], chemistry: [1, 3], mvp: [0, 2] },
-      { text: '"I play when I can. I don\'t owe anyone an explanation."', tone: 'dismissive', fan_base: [-6, -1], clout: [0, 3], chemistry: [-2, 1], mvp: [-3, 0] },
-      { text: '"I\'d rather be out there. It\'s not my call alone."', tone: 'diplomatic', fan_base: [0, 3], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
-  { id: 'disgruntled', trigger: 'random', question: "Your frustration has been showing — you've been short with teammates and the media. What's going on?",
+      { text: { en: '"Long-term health wins rings. That\'s the priority."', zh: '"长期的健康才能换戒指，这才是重点。"' }, tone: 'focused', fan_base: [-2, 2], clout: [0, 2], chemistry: [1, 3], mvp: [0, 2] },
+      { text: { en: '"I play when I can. I don\'t owe anyone an explanation."', zh: '"我能上就上，不需要向任何人解释。"' }, tone: 'dismissive', fan_base: [-6, -1], clout: [0, 3], chemistry: [-2, 1], mvp: [-3, 0] },
+      { text: { en: '"I\'d rather be out there. It\'s not my call alone."', zh: '"我更想上场，但这不全是我的决定。"' }, tone: 'diplomatic', fan_base: [0, 3], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
+  { id: 'disgruntled', trigger: 'random', question: { en: "Your frustration has been showing — you've been short with teammates and the media. What's going on?", zh: "你的不满已经藏不住了——你对队友和媒体都越来越不耐烦。到底怎么了？" },
     choices: [
-      { text: '"I\'m not happy with my situation here."', tone: 'ambitious', fan_base: [-4, 0], clout: [0, 3], chemistry: [-6, -1], mvp: [-3, 1] },
-      { text: '"Just a rough stretch. I\'ll grind through it."', tone: 'focused', fan_base: [1, 3], clout: [0, 2], chemistry: [2, 5], mvp: [0, 2] },
-      { text: '"The locker room still believes. We\'ll figure it out."', tone: 'leader', fan_base: [0, 3], clout: [0, 2], chemistry: [3, 6], mvp: [0, 2] },
+      { text: { en: '"I\'m not happy with my situation here."', zh: '"我对这里的处境不满意。"' }, tone: 'ambitious', fan_base: [-4, 0], clout: [0, 3], chemistry: [-6, -1], mvp: [-3, 1] },
+      { text: { en: '"Just a rough stretch. I\'ll grind through it."', zh: '"只是段低谷，我会咬牙撑过去。"' }, tone: 'focused', fan_base: [1, 3], clout: [0, 2], chemistry: [2, 5], mvp: [0, 2] },
+      { text: { en: '"The locker room still believes. We\'ll figure it out."', zh: '"更衣室依然相信彼此，我们会解决的。"' }, tone: 'leader', fan_base: [0, 3], clout: [0, 2], chemistry: [3, 6], mvp: [0, 2] },
     ] },
 ];
 
 const NARRATIVES = {
-  accountable: 'You earned respect by owning the loss. The locker room notices your leadership.',
-  diplomatic: 'Your words came across as deflecting blame. Some teammates seemed frustrated.',
-  dismissive: 'Fans and media felt brushed off. Your image took a minor hit.',
-  humble: 'Your humility played well with voters and fans alike. Respect grows quietly.',
-  confident: 'The bold statement raised eyebrows — some admire the swagger, others see arrogance.',
-  'team-first': 'Putting the team first resonated deeply. The coaching staff took note.',
-  loyal: 'Your commitment shut down the trade rumors. The city loves you for it.',
-  neutral: 'A safe answer that neither hurt nor helped. The story will likely die down.',
-  ambitious: 'Your honesty about chasing rings stirred controversy. Management is on edge.',
-  sincere: 'A sincere apology went over well. Most people respect growth.',
-  defensive: 'Your combative response amplified the controversy. Not the best look.',
-  silent: 'Silence left a vacuum. Speculation continues, but it\'ll fade with time.',
-  candid: 'Your raw honesty was refreshing. Fans appreciate the realness.',
-  defiant: 'Your defiance turned heads. Critics call it arrogance; supporters call it fire.',
-  focused: 'Your single-minded focus steadied the room. The team rallied around it.',
-  leader: 'You spoke like a leader and the locker room followed. Respect grows.',
-  proud: 'Your pride in the game is contagious. Fans and teammates feel it.',
+  accountable: { en: 'You earned respect by owning the loss. The locker room notices your leadership.', zh: '你主动揽下失利，赢得了尊重。更衣室注意到了你的担当。' },
+  diplomatic: { en: 'Your words came across as deflecting blame. Some teammates seemed frustrated.', zh: '你的话听起来像在推卸责任，一些队友面露不悦。' },
+  dismissive: { en: 'Fans and media felt brushed off. Your image took a minor hit.', zh: '球迷和媒体觉得被冷落，你的形象受了点小伤。' },
+  humble: { en: 'Your humility played well with voters and fans alike. Respect grows quietly.', zh: '你的谦逊赢得了投票人和球迷的好感，尊重在悄然累积。' },
+  confident: { en: 'The bold statement raised eyebrows — some admire the swagger, others see arrogance.', zh: '这番豪言让人侧目——有人欣赏这份狂气，也有人看成傲慢。' },
+  'team-first': { en: 'Putting the team first resonated deeply. The coaching staff took note.', zh: '把团队放在第一位，引起了深深共鸣。教练组记在了心里。' },
+  loyal: { en: 'Your commitment shut down the trade rumors. The city loves you for it.', zh: '你的忠诚表态平息了交易流言，这座城市因此更爱你。' },
+  neutral: { en: 'A safe answer that neither hurt nor helped. The story will likely die down.', zh: '一个不痛不痒的安全答案。这件事大概会慢慢过去。' },
+  ambitious: { en: 'Your honesty about chasing rings stirred controversy. Management is on edge.', zh: '你直言想要总冠军，惹来争议。管理层有些不安。' },
+  sincere: { en: 'A sincere apology went over well. Most people respect growth.', zh: '真诚的道歉反响不错，大多数人尊重成长。' },
+  defensive: { en: 'Your combative response amplified the controversy. Not the best look.', zh: '你针锋相对的回应放大了争议，观感并不好。' },
+  silent: { en: 'Silence left a vacuum. Speculation continues, but it\'ll fade with time.', zh: '沉默留下了空白。猜测还在继续，但终会随时间淡去。' },
+  candid: { en: 'Your raw honesty was refreshing. Fans appreciate the realness.', zh: '你坦诚得让人耳目一新，球迷欣赏这份真实。' },
+  defiant: { en: 'Your defiance turned heads. Critics call it arrogance; supporters call it fire.', zh: '你的倔强令人侧目。批评者说是傲慢，支持者说是血性。' },
+  focused: { en: 'Your single-minded focus steadied the room. The team rallied around it.', zh: '你的专注让更衣室安定下来，球队因此团结。' },
+  leader: { en: 'You spoke like a leader and the locker room followed. Respect grows.', zh: '你像领袖一样发言，更衣室愿意跟随。敬意在增长。' },
+  proud: { en: 'Your pride in the game is contagious. Fans and teammates feel it.', zh: '你对这项运动的热爱很有感染力，球迷和队友都感受到了。' },
 };
 
 // Notable-performance interviews — media now fires ONLY on big moments (a broken
@@ -3214,7 +3256,8 @@ function handleNotableMedia(playerId, choiceIndex) {
   if ('chemistry' in choice) nudgeBonds(playerId, randInt(choice.chemistry[0], choice.chemistry[1]));
   if ('mvp' in choice) effects.mvp_votes = clamp((p.mvp_votes ?? 0) + randInt(choice.mvp[0], choice.mvp[1]), 0, 100);
   addValues(playerId, MEDIA_TONE_VALUES[choice.tone] || {});
-  const narrative = NARRATIVES[choice.tone] || 'Your words had a subtle impact on those around you.';
+  const lang = getLeagueState(playerId).lang || 'en';
+  const narrative = pick(NARRATIVES[choice.tone], lang) || 'Your words had a subtle impact on those around you.';
   const parts = []; const vals = [];
   for (const [key, val] of Object.entries(effects)) { parts.push(`${key}=?`); vals.push(val); }
   parts.push('morale=?'); vals.push(clamp(p.morale + randInt(-3, 5), 10, 100));
@@ -3224,7 +3267,7 @@ function handleNotableMedia(playerId, choiceIndex) {
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
   const question = scene.question(notable);
   db.prepare("INSERT INTO media_events (player_id,season_number,scenario_id,event_type,description,choice_made,narrative_result) VALUES (?,?,?,'interview',?,?,?)")
-    .run(playerId, getLeagueState(playerId).current_season, 'notable_' + notable.type, question, choice.text, narrative);
+    .run(playerId, getLeagueState(playerId).current_season, 'notable_' + notable.type, question, choice.text, pick(NARRATIVES[choice.tone], 'en'));
   return { question, choice: choice.text, narrative, tone: choice.tone };
 }
 
@@ -3245,7 +3288,8 @@ function handleMediaEvent(playerId, scenarioId, choiceIndex) {
   if ('mvp' in choice) effects.mvp_votes = clamp((p.mvp_votes ?? 0) + randInt(choice.mvp[0], choice.mvp[1]), 0, 100);
   // Media answers quietly shape the values axis (who you are).
   addValues(playerId, MEDIA_TONE_VALUES[choice.tone] || {});
-  const narrative = NARRATIVES[choice.tone] || 'Your words had a subtle impact on those around you.';
+  const lang = getLeagueState(playerId).lang || 'en';
+  const narrative = pick(NARRATIVES[choice.tone], lang) || 'Your words had a subtle impact on those around you.';
   const parts = []; const vals = [];
   for (const [key, val] of Object.entries(effects)) { parts.push(`${key}=?`); vals.push(val); }
   parts.push('morale=?'); vals.push(clamp(p.morale + randInt(-3, 5), 10, 100));
@@ -3253,8 +3297,8 @@ function handleMediaEvent(playerId, scenarioId, choiceIndex) {
   vals.push(playerId);
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
   db.prepare("INSERT INTO media_events (player_id,season_number,scenario_id,event_type,description,choice_made,narrative_result) VALUES (?,?,?,'interview',?,?,?)")
-    .run(playerId, getLeagueState(playerId).current_season, scenarioId, scenario.question, choice.text, narrative);
-  return { scenario: scenario.question, choice: choice.text, narrative, tone: choice.tone };
+    .run(playerId, getLeagueState(playerId).current_season, scenarioId, pick(scenario.question, 'en'), pick(choice.text, 'en'), pick(NARRATIVES[choice.tone], 'en'));
+  return { scenario: pick(scenario.question, lang), choice: pick(choice.text, lang), narrative, tone: choice.tone };
 }
 
 function getRandomMediaScenario(playerId) {
@@ -3350,156 +3394,176 @@ const LIFE_EVENTS = [
   // --- Love / partner chain ---
   { id: 'meet_partner', type: 'partner', intro: true, min_age: 22,
     names: ['Jordan', 'Riley', 'Sam', 'Taylor', 'Casey'],
-    question: "You hit it off with someone at a teammate's party — smart, funny, and unbothered by the fame. What do you do?",
+    question: { en: "At a teammate's party you met someone who talked to you like a person, not a highlight reel. It's been on your mind since. What do you do?", zh: "在队友的聚会上，你遇到了一个把你当普通人而不是球星来聊天的人。之后你一直忘不掉。你打算怎么做？" },
     choices: [
-      { text: "Ask them out — see where it goes.", tone: 'pursue', effects: { morale: [2, 5] }, bond: 8, next: 'dating' },
-      { text: "Keep your head down — focus on basketball.", tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
+      { text: { en: "Ask them out — see where it goes.", zh: "约对方出来——看看会怎样。" }, tone: 'pursue', effects: { morale: [2, 5] }, bond: 8, next: 'dating' },
+      { text: { en: "Keep your head down — focus on basketball.", zh: "保持低调——专注篮球。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
     ] },
   { id: 'dating', type: 'partner',
-    question: "Things are going well, but the road schedule is hard on a new relationship. How do you handle it?",
+    question: { en: "Things are going well, but the road schedule is hard on a new relationship. How do you handle it?", zh: "一切进展顺利，但漫长的客场赛程让这段新关系很吃力。你怎么处理？" },
     choices: [
-      { text: "Make time — this one matters.", tone: 'commit', effects: { morale: [1, 3] }, bond: 10, next: 'proposal' },
-      { text: "Keep it casual for now.", tone: 'casual', effects: { morale: [0, 2] }, bond: 2 },
-      { text: "End it cleanly before it gets complicated.", tone: 'end', effects: { morale: [-4, -1] }, bond: -30, status: 'ended' },
+      { text: { en: "Make time — this one matters.", zh: "挤出时间——这个人值得。" }, tone: 'commit', effects: { morale: [1, 3] }, bond: 10, next: 'proposal' },
+      { text: { en: "Keep it casual for now.", zh: "先保持轻松，不急着定义。" }, tone: 'casual', effects: { morale: [0, 2] }, bond: 2 },
+      { text: { en: "End it cleanly before it gets complicated.", zh: "在变得复杂之前，体面地结束。" }, tone: 'end', effects: { morale: [-4, -1] }, bond: -30, status: 'ended' },
     ] },
   { id: 'proposal', type: 'partner',
-    question: "You're ready to settle down. Do you propose?",
+    question: { en: "You're ready to settle down. Do you propose?", zh: "你准备好安定了。要求婚吗？" },
     choices: [
-      { text: "Yes — get engaged.", tone: 'propose', effects: { morale: [3, 6], fan_base: [1, 3] }, bond: 10, next: 'marriage' },
-      { text: "Not yet — a little more time.", tone: 'wait', effects: { morale: [0, 1] }, bond: 2 },
+      { text: { en: "Yes — get engaged.", zh: "求婚——订婚。" }, tone: 'propose', effects: { morale: [3, 6], fan_base: [1, 3] }, bond: 10, next: 'marriage' },
+      { text: { en: "Not yet — a little more time.", zh: "再等等——多一点时间。" }, tone: 'wait', effects: { morale: [0, 1] }, bond: 2 },
     ] },
   { id: 'marriage', type: 'partner',
-    question: "The wedding is planned. A quiet ceremony, or a big media event?",
+    question: { en: "The wedding is planned. A quiet ceremony, or a big media event?", zh: "婚礼已经排上了日程。办一场安静的仪式，还是公开的媒体盛宴？" },
     choices: [
-      { text: "Private ceremony — just family.", tone: 'private', effects: { morale: [2, 4] }, attr_effects: { composure: [1, 3] }, bond: 8, status: 'married', next: 'kids' },
-      { text: "Go public — a celebrity wedding.", tone: 'public', effects: { fan_base: [4, 8], clout: [1, 3], wealth: [-3, -1] }, bond: 4, status: 'married', next: 'kids' },
+      { text: { en: "Private ceremony — just family.", zh: "私密仪式——只有家人。" }, tone: 'private', effects: { morale: [2, 4] }, attr_effects: { composure: [1, 3] }, bond: 8, status: 'married', next: 'kids' },
+      { text: { en: "Go public — a celebrity wedding.", zh: "公开办——一场名人婚礼。" }, tone: 'public', effects: { fan_base: [4, 8], clout: [1, 3], wealth: [-3, -1] }, bond: 4, status: 'married', next: 'kids' },
     ] },
   { id: 'kids', type: 'partner',
-    question: "Your partner brings up starting a family. How do you feel?",
+    question: { en: "Your partner brings up starting a family. How do you feel?", zh: "伴侣提起了组建家庭的事。你怎么想？" },
     choices: [
-      { text: "Let's do it — family is everything.", tone: 'family', effects: { morale: [3, 6] }, attr_effects: { composure: [1, 3] }, bond: 10, next: 'kids_grow' },
-      { text: "Not yet — my window is now.", tone: 'career', attr_effects: { work_ethic: [1, 2] }, bond: -4 },
+      { text: { en: "Let's do it — family is everything.", zh: "好，生——家庭比什么都重要。" }, tone: 'family', effects: { morale: [3, 6] }, attr_effects: { composure: [1, 3] }, bond: 10, next: 'kids_grow' },
+      { text: { en: "Not yet — my window is now.", zh: "再等等——我的巅峰期就是现在。" }, tone: 'career', attr_effects: { work_ethic: [1, 2] }, bond: -4 },
+    ] },
+  { id: 'fame_pressure', type: 'partner', blocked_by: 'never',
+    question: { en: "Your partner is struggling with the spotlight — the constant attention, the rumors, the strangers. It's wearing on them.", zh: "聚光灯让你的伴侣喘不过气——无休止的关注、流言、陌生人的目光。他/她越来越疲惫。" },
+    choices: [
+      { text: { en: "Step back from some of the fame.", zh: "为对方适当远离聚光灯。" }, tone: 'private', effects: { fan_base: [-3, -1], morale: [2, 4] }, bond: 12 },
+      { text: { en: "Tell them to toughen up.", zh: "让他/她学着坚强一点。" }, tone: 'dismiss', effects: { morale: [-3, -1] }, bond: -8 },
+      { text: { en: "Get them real help — a counselor.", zh: "认真帮对方——请个心理咨询师。" }, tone: 'practical', effects: { wealth: [-2, -1], morale: [1, 2] }, bond: 6 },
     ] },
 
   // --- Family chain ---
   { id: 'parent_illness', type: 'family', intro: true, min_age: 20, name: 'Mom',
-    question: "Your mom is in the hospital — serious but stable. You have a game in two days.",
+    question: { en: "Your mom's test results came back, and the doctors want to keep her a few more days. There's a game in two days.", zh: "妈妈的检查结果出来了，医生想让她再住院观察几天。而你两天后有一场比赛。" },
     choices: [
-      { text: "Fly home to be there — miss two games.", tone: 'family', effects: { fan_base: [2, 5], morale: [-6, -2] }, attr_effects: { composure: [-2, -1] }, bond: 12, miss_games: 2, next: 'family_care' },
-      { text: "Stay with the team — she'll understand.", tone: 'career', effects: { morale: [-3, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: -8, next: 'family_care' },
+      { text: { en: "Fly home to be there — miss two games.", zh: "飞回去陪她——缺席两场比赛。" }, tone: 'family', effects: { fan_base: [2, 5], morale: [-6, -2] }, attr_effects: { composure: [-2, -1] }, bond: 12, miss_games: 2, next: 'family_care' },
+      { text: { en: "Stay with the team — she'll understand.", zh: "留在队里——她会理解的。" }, tone: 'career', effects: { morale: [-3, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: -8, next: 'family_care' },
     ] },
   { id: 'family_care', type: 'family',
-    question: "Your mom is recovering slowly and keeps telling you not to worry. How do you handle it from afar?",
+    question: { en: "Your mom is recovering slowly and keeps telling you not to worry. How do you handle it from afar?", zh: "妈妈恢复得很慢，却总叫你别担心。远在千里之外，你该怎么照顾她？" },
     choices: [
-      { text: "Check in daily, keep her close.", tone: 'close', effects: { morale: [1, 3] }, bond: 6 },
-      { text: "Hire a full-time caregiver and focus on the game.", tone: 'practical', effects: { wealth: [-2, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: 2 },
+      { text: { en: "Check in daily, keep her close.", zh: "每天打电话，保持联系。" }, tone: 'close', effects: { morale: [1, 3] }, bond: 6 },
+      { text: { en: "Hire a full-time caregiver and focus on the game.", zh: "雇一个全职护工，然后专注比赛。" }, tone: 'practical', effects: { wealth: [-2, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: 2 },
+    ] },
+  { id: 'sibling_success', type: 'family', intro: true, min_experience: 4, name: 'Your Sibling',
+    question: { en: "Your younger sibling just landed a big job on their own — no help from you. They're doing fine, and there's a quiet distance between you now.", zh: "你的弟弟/妹妹凭自己拿到了一份很好的工作，没靠你任何关系。他/她过得不错，但你们之间多了一层微妙的距离。" },
+    choices: [
+      { text: { en: "Reach out — bridge the gap.", zh: "主动联系——弥合这段距离。" }, tone: 'close', effects: { morale: [1, 3] }, bond: 10 },
+      { text: { en: "Let them have their space.", zh: "给他/她空间，顺其自然。" }, tone: 'hands-off', effects: { morale: [0, 1] }, bond: 2 },
     ] },
 
   // --- Friend chain ---
   { id: 'childhood_friend', type: 'friend', intro: true, min_age: 20,
     names: ['Chris', 'Jay', 'Dre', 'Devon', 'Marcus'],
-    question: "An old friend from home calls out of the blue. They're in financial trouble and asking for a loan.",
+    question: { en: "The phone rings — it's the friend you grew up with, the one who knew you before any of this. He's in financial trouble and asking for a loan.", zh: "电话响了——是和你一起长大的朋友，那个在你成名之前就认识你的人。他遇到了经济困难，想找你借钱。" },
     choices: [
-      { text: "Lend them the money.", tone: 'lend', effects: { wealth: [-3, -1] }, bond: 10, next: 'friend_trouble' },
-      { text: "Say no — you can't bail everyone out.", tone: 'decline', effects: { morale: [-2, 0] }, decline: true },
+      { text: { en: "Lend them the money.", zh: "借钱给他。" }, tone: 'lend', effects: { wealth: [-3, -1] }, bond: 10, next: 'friend_trouble' },
+      { text: { en: "Say no — you can't bail everyone out.", zh: "拒绝——你不可能帮所有人兜底。" }, tone: 'decline', effects: { morale: [-2, 0] }, decline: true },
     ] },
   { id: 'friend_trouble', type: 'friend',
-    question: "Your friend is back — this time asking for much more, and something feels off.",
+    question: { en: "Your friend is back — this time asking for much more, and something feels off.", zh: "朋友又来了——这次要的更多，而且你感觉有些不对劲。" },
     choices: [
-      { text: "Cut them off. This is a pattern.", tone: 'firm', effects: { clout: [0, 1] }, bond: -20, status: 'ended' },
-      { text: "Help once more, but draw the line.", tone: 'help', effects: { wealth: [-5, -2], morale: [-2, 0] }, bond: 4 },
+      { text: { en: "Cut them off. This is a pattern.", zh: "断绝往来。这已经是惯犯了。" }, tone: 'firm', effects: { clout: [0, 1] }, bond: -20, status: 'ended' },
+      { text: { en: "Help once more, but draw the line.", zh: "再帮一次，但把话说清楚。" }, tone: 'help', effects: { wealth: [-5, -2], morale: [-2, 0] }, bond: 4 },
+    ] },
+  { id: 'friend_jealousy', type: 'friend',
+    question: { en: "Your old friend has been distant lately — a little cold in texts, skipping your calls. Someone says he's jealous of everything you have now.", zh: "老朋友最近变得疏远——短信很冷淡，也总是错过你的电话。有人说，他是嫉妒你现在拥有的一切。" },
+    choices: [
+      { text: { en: "Confront it honestly.", zh: "坦诚地聊一聊。" }, tone: 'close', effects: { morale: [-2, 2] }, bond: 8 },
+      { text: { en: "Give him time to come around.", zh: "给他时间，等他缓过来。" }, tone: 'calm', effects: { morale: [0, 1] }, bond: 2 },
+      { text: { en: "Drift apart — you've outgrown this.", zh: "渐行渐远——你们已经不在一个世界了。" }, tone: 'hands-off', bond: -10, status: 'ended' },
     ] },
 
   // --- Mentor chain ---
   { id: 'meet_mentor', type: 'mentor', intro: true, min_experience: 1,
     names: ['Coach Rivers', 'Veteran Carter', 'Old Head Davis'],
-    question: "A grizzled veteran pulls you aside after practice and says you have 'it' — and wants to teach you the rest.",
+    question: { en: "A grizzled veteran pulls you aside after practice and says you have 'it' — and wants to teach you the rest.", zh: "一位身经百战的老将训练后把你拉到一边，说你有'那种东西'——他想把剩下的都教给你。" },
     choices: [
-      { text: "Take the mentorship.", tone: 'accept', effects: { morale: [1, 3] }, bond: 8, next: 'mentor_wisdom' },
-      { text: "You've got this on your own.", tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
+      { text: { en: "Take the mentorship.", zh: "接受这份指导。" }, tone: 'accept', effects: { morale: [1, 3] }, bond: 8, next: 'mentor_wisdom' },
+      { text: { en: "You've got this on your own.", zh: "你自己能行。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
     ] },
   { id: 'mentor_wisdom', type: 'mentor',
-    question: "Your mentor is teaching you the nuances — but he also wants you to carry the torch when he's gone.",
+    question: { en: "Your mentor is teaching you the nuances — but he also wants you to carry the torch when he's gone.", zh: "导师在教你那些微妙之处——但他也希望，当他离开后，你能接过火炬。" },
     choices: [
-      { text: "Learn everything you can.", tone: 'learn', attr_effects: { bbiq: [1, 2], leadership: [0, 1] }, bond: 8, next: 'mentor_retire' },
-      { text: "Just play — instincts beat lectures.", tone: 'dismiss', effects: { morale: [-1, 1] }, bond: -4 },
+      { text: { en: "Learn everything you can.", zh: "尽你所能地学。" }, tone: 'learn', attr_effects: { bbiq: [1, 2], leadership: [0, 1] }, bond: 8, next: 'mentor_retire' },
+      { text: { en: "Just play — instincts beat lectures.", zh: "上场打球就行——直觉胜过说教。" }, tone: 'dismiss', effects: { morale: [-1, 1] }, bond: -4 },
     ] },
   { id: 'mentor_retire', type: 'mentor',
-    question: "Your mentor is retiring. He offers to publicly endorse you as the franchise's next leader.",
+    question: { en: "Your mentor is retiring. He offers to publicly endorse you as the franchise's next leader.", zh: "导师要退役了。他提出要公开力挺你，成为球队的下一个领袖。" },
     choices: [
-      { text: "Accept his endorsement.", tone: 'accept', effects: { clout: [1, 3], fan_base: [1, 3] }, attr_effects: { leadership: [1, 2] }, bond: 6 },
-      { text: "Politely decline — make your own name.", tone: 'decline', effects: { morale: [0, 1] }, bond: 2 },
+      { text: { en: "Accept his endorsement.", zh: "接受他的力挺。" }, tone: 'accept', effects: { clout: [1, 3], fan_base: [1, 3] }, attr_effects: { leadership: [1, 2] }, bond: 6 },
+      { text: { en: "Politely decline — make your own name.", zh: "婉拒——你想靠自己打出名堂。" }, tone: 'decline', effects: { morale: [0, 1] }, bond: 2 },
     ] },
 
   // --- Agent chain ---
   { id: 'meet_agent', type: 'agent', intro: true, min_experience: 1,
     names: ['Rich Paul', 'Agent Lee', 'Tommy the Fixer'],
-    question: "A slick agent wants to represent you — he promises bigger contracts but takes a hefty cut.",
+    question: { en: "A slick agent wants to represent you — he promises bigger contracts but takes a hefty cut.", zh: "一位精明的经纪人想代理你——他承诺更大的合同，但要抽成不菲。" },
     choices: [
-      { text: "Sign with him.", tone: 'sign', effects: { clout: [0, 2] }, bond: 6, next: 'agent_push' },
-      { text: "Keep handling your own deals.", tone: 'decline', effects: { wealth: [0, 1] }, decline: true },
+      { text: { en: "Sign with him.", zh: "签下他。" }, tone: 'sign', effects: { clout: [0, 2] }, bond: 6, next: 'agent_push' },
+      { text: { en: "Keep handling your own deals.", zh: "继续自己打理合同。" }, tone: 'decline', effects: { wealth: [0, 1] }, decline: true },
     ] },
   { id: 'agent_push', type: 'agent',
-    question: "Your agent is pushing a questionable endorsement and pressuring you to sign.",
+    question: { en: "Your agent is pushing a questionable endorsement and pressuring you to sign.", zh: "经纪人正在推一个来路不明的代言，还不断施压让你签字。" },
     choices: [
-      { text: "Trust him — he knows the market.", tone: 'trust', effects: { wealth: [1, 4], fan_base: [-2, 0] }, bond: 4 },
-      { text: "Fire him and find someone honest.", tone: 'fire', effects: { wealth: [-1, -2] }, bond: -15, status: 'ended' },
+      { text: { en: "Trust him — he knows the market.", zh: "相信他——他懂市场。" }, tone: 'trust', effects: { wealth: [1, 4], fan_base: [-2, 0] }, bond: 4 },
+      { text: { en: "Fire him and find someone honest.", zh: "炒了他，找一个诚实的人。" }, tone: 'fire', effects: { wealth: [-1, -2] }, bond: -15, status: 'ended' },
     ] },
 
   // --- Rival chain ---
   { id: 'meet_rival', type: 'rival', intro: true, min_experience: 0,
     names: ['The Next Big Thing', 'Your Draft-Mate', 'The Golden Boy'],
-    question: "A player from your draft class is being crowned the future of the league — and he's taken shots at you in interviews.",
+    question: { en: "A player from your draft class is being crowned the future of the league — and he's taken shots at you in interviews.", zh: "和你同届的一个新秀被捧成联盟的未来——而且他在采访里对你冷嘲热讽。" },
     choices: [
-      { text: "Make it personal.", tone: 'fuel', effects: { morale: [1, 3] }, attr_effects: { work_ethic: [1, 2] }, bond: -5, next: 'rival_clash' },
-      { text: "Ignore the noise.", tone: 'calm', attr_effects: { composure: [1, 2] }, bond: -5, next: 'rival_clash' },
+      { text: { en: "Make it personal.", zh: "把这事放在心上。" }, tone: 'fuel', effects: { morale: [1, 3] }, attr_effects: { work_ethic: [1, 2] }, bond: -5, next: 'rival_clash' },
+      { text: { en: "Ignore the noise.", zh: "无视这些噪音。" }, tone: 'calm', attr_effects: { composure: [1, 2] }, bond: -5, next: 'rival_clash' },
     ] },
   { id: 'rival_clash', type: 'rival',
-    question: "You face your rival tonight. The whole league is watching.",
+    question: { en: "You face your rival tonight. The whole league is watching.", zh: "今晚你对阵宿敌。整个联盟都在盯着。" },
     choices: [
-      { text: "Turn it into a duel — dominate him.", tone: 'duel', effects: { clout: [1, 4] }, attr_effects: { clutch_factor: [0, 1] }, bond: -6, next: 'rival_revenge' },
-      { text: "Treat it like any other game.", tone: 'cool', attr_effects: { composure: [2, 3] }, bond: 2, set_flag: 'cooled_rival' },
+      { text: { en: "Turn it into a duel — dominate him.", zh: "把它变成一场决斗——碾压他。" }, tone: 'duel', effects: { clout: [1, 4] }, attr_effects: { clutch_factor: [0, 1] }, bond: -6, next: 'rival_revenge' },
+      { text: { en: "Treat it like any other game.", zh: "当成普通比赛来打。" }, tone: 'cool', attr_effects: { composure: [2, 3] }, bond: 2, set_flag: 'cooled_rival' },
     ] },
   { id: 'rival_revenge', type: 'rival', blocked_by: 'cooled_rival',
-    question: "Your rival is at it again — throwing shade and challenging you publicly. The rivalry has followed you.",
+    question: { en: "Your rival is at it again — throwing shade and challenging you publicly. The rivalry has followed you.", zh: "宿敌又来了——公开挑衅你。这段恩怨一直缠着你。" },
     choices: [
-      { text: "Answer him on the court.", tone: 'duel', effects: { clout: [1, 3] }, bond: -5 },
-      { text: "You're past this. Let it go.", tone: 'cool', attr_effects: { composure: [1, 2] }, bond: 2, set_flag: 'cooled_rival' },
+      { text: { en: "Answer him on the court.", zh: "在球场上回应他。" }, tone: 'duel', effects: { clout: [1, 3] }, bond: -5 },
+      { text: { en: "You're past this. Let it go.", zh: "你早就看开了。算了吧。" }, tone: 'cool', attr_effects: { composure: [1, 2] }, bond: 2, set_flag: 'cooled_rival' },
     ] },
 
   // --- Family depth ---
   { id: 'kids_grow', type: 'family',
-    question: "Your child is old enough to pick up a basketball — and they're obsessed with your game.",
+    question: { en: "Your child is old enough to pick up a basketball — and they're obsessed with your game.", zh: "你的孩子已经大到能抱起篮球了——而且对你的比赛痴迷不已。" },
     choices: [
-      { text: "Coach them yourself.", tone: 'coach', effects: { morale: [2, 4] }, attr_effects: { leadership: [0, 1] }, bond: 6 },
-      { text: "Hire a trainer — your career comes first.", tone: 'delegate', effects: { wealth: [-1, -2] }, bond: 1 },
+      { text: { en: "Coach them yourself.", zh: "亲自教他/她打球。" }, tone: 'coach', effects: { morale: [2, 4] }, attr_effects: { leadership: [0, 1] }, bond: 6 },
+      { text: { en: "Hire a trainer — your career comes first.", zh: "请个训练师——你的职业生涯优先。" }, tone: 'delegate', effects: { wealth: [-1, -2] }, bond: 1 },
     ] },
   { id: 'sibling_ask', type: 'family', intro: true, min_experience: 2, name: 'Your Sibling',
-    question: "Your sibling wants you to help them break into the basketball business — as an agent or front-office intern.",
+    question: { en: "Your sibling wants you to help them break into the basketball business — as an agent or front-office intern.", zh: "你的兄弟姐妹想靠你进入篮球圈——当经纪人或球队管理层实习生。" },
     choices: [
-      { text: "Open doors for them.", tone: 'help', effects: { clout: [-1, 0], morale: [1, 3] }, bond: 8, next: 'sibling_trouble' },
-      { text: "They need to earn it themselves.", tone: 'decline', effects: { morale: [-2, 0] }, decline: true },
+      { text: { en: "Open doors for them.", zh: "帮他/她打开门路。" }, tone: 'help', effects: { clout: [-1, 0], morale: [1, 3] }, bond: 8, next: 'sibling_trouble' },
+      { text: { en: "They need to earn it themselves.", zh: "他/她得靠自己争取。" }, tone: 'decline', effects: { morale: [-2, 0] }, decline: true },
     ] },
   { id: 'sibling_trouble', type: 'family',
-    question: "Your sibling's new role is causing locker-room whispers about nepotism.",
+    question: { en: "Your sibling's new role is causing locker-room whispers about nepotism.", zh: "你兄弟姐妹的新职位，让更衣室里传起了'任人唯亲'的闲话。" },
     choices: [
-      { text: "Publicly defend them.", tone: 'defend', effects: { fan_base: [-3, 0], morale: [1, 2] }, bond: 5 },
-      { text: "Let them fight their own battle.", tone: 'hands-off', effects: { clout: [0, 1] }, bond: -3 },
+      { text: { en: "Publicly defend them.", zh: "公开维护他/她。" }, tone: 'defend', effects: { fan_base: [-3, 0], morale: [1, 2] }, bond: 5 },
+      { text: { en: "Let them fight their own battle.", zh: "让他/她自己面对。" }, tone: 'hands-off', effects: { clout: [0, 1] }, bond: -3 },
     ] },
 
   // --- Mentor (you become the mentor) ---
   { id: 'mentor_protege', type: 'protege', intro: true, min_experience: 3, min_leadership: 70,
     names: ['Jalen', 'Marcus', 'The Kid', 'Devon'],
-    question: "A rookie keeps studying your game and asking for advice. The coaches think he could be special — if someone shows him the ropes.",
+    question: { en: "A rookie keeps studying your game and asking for advice. The coaches think he could be special — if someone shows him the ropes.", zh: "一个新秀总在研究你的打法，不断向你请教。教练们觉得，只要有人带，他可能成气候。" },
     choices: [
-      { text: "Take him under your wing.", tone: 'accept', effects: { morale: [1, 3] }, attr_effects: { leadership: [1, 2] }, bond: 8, next: 'protege_growth' },
-      { text: "He needs to figure it out himself.", tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
+      { text: { en: "Take him under your wing.", zh: "把他收在麾下，亲自带。" }, tone: 'accept', effects: { morale: [1, 3] }, attr_effects: { leadership: [1, 2] }, bond: 8, next: 'protege_growth' },
+      { text: { en: "He needs to figure it out himself.", zh: "他得靠自己摸索。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
     ] },
   { id: 'protege_growth', type: 'protege',
-    question: "Your protege is turning heads around the league. How much do you invest in his rise?",
+    question: { en: "Your protege is turning heads around the league. How much do you invest in his rise?", zh: "你的徒弟在联盟里崭露头角。你愿意在他的成长上投入多少？" },
     choices: [
-      { text: "Give him everything I know.", tone: 'coach', effects: { morale: [2, 4] }, attr_effects: { leadership: [1, 2] }, bond: 12 },
-      { text: "Let him earn it, but be there when he needs me.", tone: 'close', effects: { morale: [0, 2] }, bond: 6 },
+      { text: { en: "Give him everything I know.", zh: "倾囊相授。" }, tone: 'coach', effects: { morale: [2, 4] }, attr_effects: { leadership: [1, 2] }, bond: 12 },
+      { text: { en: "Let him earn it, but be there when he needs me.", zh: "让他自己闯，但需要时我都在。" }, tone: 'close', effects: { morale: [0, 2] }, bond: 6 },
     ] },
 ];
 
@@ -3562,8 +3626,8 @@ function introAvailable(playerId, ev, season) {
 }
 
 // Whether a relationship chain is waiting on the player's next choice — a
-// "stuck" life event that should pause the simulation (unlike a fresh intro,
-// which is just a new possibility and stays non-blocking).
+// "stuck" life event that should pause the simulation. Fresh intros are handled
+// separately (soft ticker marker, not a hard pause).
 function hasPendingLifeEvent(playerId) {
   const seen = new Set(db.prepare('SELECT event_id FROM life_events WHERE player_id=? AND event_id IS NOT NULL').all(playerId).map(r => r.event_id));
   const flags = new Set(JSON.parse(db.prepare('SELECT flags FROM players WHERE id=?').get(playerId)?.flags || '[]'));
@@ -3573,6 +3637,22 @@ function hasPendingLifeEvent(playerId) {
     const ev = LIFE_EVENTS.find(e => e.id === r.pending_event);
     return ev && !(ev.blocked_by && flags.has(ev.blocked_by));
   });
+}
+
+// A fresh intro (a new person entering the story) is available — surfaced as a
+// soft ticker marker, not a hard pause.
+function hasIntroLifeEvent(playerId) {
+  const p = db.prepare('SELECT age, experience, flags, leadership FROM players WHERE id=?').get(playerId);
+  if (!p) return false;
+  const season = getLeagueState(playerId).current_season;
+  const flags = new Set(JSON.parse(p.flags || '[]'));
+  const blocked = ev => ev && ev.blocked_by && flags.has(ev.blocked_by);
+  return LIFE_EVENTS.some(e => e.intro
+    && (e.min_age == null || p.age >= e.min_age)
+    && (e.min_experience == null || p.experience >= e.min_experience)
+    && (e.min_leadership == null || (p.leadership ?? 0) >= e.min_leadership)
+    && !blocked(e)
+    && introAvailable(playerId, e, season));
 }
 
 function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null) {
@@ -3648,10 +3728,11 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
   }
 
   db.prepare('INSERT INTO life_events (player_id,season_number,event_id,relationship_id,description,choice_made) VALUES (?,?,?,?,?,?)')
-    .run(playerId, season, ev.id, rel ? rel.id : null, ev.question, ch.text);
+    .run(playerId, season, ev.id, rel ? rel.id : null, pick(ev.question, 'en'), pick(ch.text, 'en'));
 
+  const lang = getLeagueState(playerId).lang || 'en';
   return {
-    event: ev.question, choice: ch.text,
+    event: pick(ev.question, lang), choice: pick(ch.text, lang),
     relationship: rel ? { id: rel.id, name: rel.name, type: rel.type, bond: newBond, status: newStatus } : null,
     effects,
     next_event: nextEvent ? nextEvent.id : null,
@@ -4020,7 +4101,8 @@ app.put('/api/player/:id/load-management', wrap((req) => {
 }));
 app.post('/api/player/:id/injury-treatment', wrap((req) => applyInjuryTreatment(req.params.id, req.query.option)));
 app.post('/api/player/:id/retire', wrap((req) => resolveRetirement(req.params.id, req.query.choice)));
-app.post('/api/season/allstar-weekend/:id', wrap((req) => resolveAllStarWeekend(req.params.id, req.query.choice)));
+app.get('/api/season/allstar-weekend-options/:id', wrap(() => ({ dunks: DUNK_ACTIONS, spots: THREE_SPOTS })));
+app.post('/api/season/allstar-weekend/:id', wrap((req) => resolveAllStarWeekend(req.params.id, req.query.choice, req.query.action)));
 app.get('/api/player/:id/second-life', wrap((req) => ({ options: getSecondLifeOptions(req.params.id), chosen: db.prepare('SELECT second_life, legacy_score FROM players WHERE id=?').get(req.params.id) })));
 app.post('/api/player/:id/second-life', wrap((req) => chooseSecondLife(req.params.id, req.query.path)));
 app.post('/api/player/:id/second-life-advance', wrap((req) => advanceSecondLife(req.params.id)));
@@ -4127,12 +4209,15 @@ app.get('/api/economy/intl/:id', wrap((req) => ({ tournament: getLeagueState(req
 app.post('/api/economy/play-intl/:id', wrap((req) => playIntlTournament(req.params.id)));
 
 // Game mode: story (more narrative), classic (default), sandbox (edit attributes).
-app.get('/api/settings/:id', wrap((req) => ({ game_mode: getLeagueState(req.params.id).game_mode || 'classic', modes: ['story', 'classic', 'sandbox'] })));
+app.get('/api/settings/:id', wrap((req) => ({ game_mode: getLeagueState(req.params.id).game_mode || 'classic', lang: getLeagueState(req.params.id).lang || 'en', modes: ['story', 'classic', 'sandbox'], langs: ['en', 'zh'] })));
 app.put('/api/settings/:id', wrap((req) => {
-  const mode = req.query.mode || 'classic';
+  const state = getLeagueState(req.params.id);
+  const mode = req.query.mode || state.game_mode || 'classic';
+  const lang = req.query.lang || state.lang || 'en';
   if (!['story', 'classic', 'sandbox'].includes(mode)) throw httpError(400, 'Invalid mode. Options: story, classic, sandbox');
-  db.prepare('UPDATE league_state SET game_mode=? WHERE player_id=?').run(mode, req.params.id);
-  return { game_mode: mode };
+  if (!['en', 'zh'].includes(lang)) throw httpError(400, 'Invalid language. Options: en, zh');
+  db.prepare('UPDATE league_state SET game_mode=?, lang=? WHERE player_id=?').run(mode, lang, req.params.id);
+  return { game_mode: mode, lang };
 }));
 app.put('/api/player/:id/attribute', wrap((req) => {
   if ((getLeagueState(req.params.id).game_mode || 'classic') !== 'sandbox') throw httpError(400, 'Attribute editing is only available in Sandbox mode.');
