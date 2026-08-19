@@ -112,16 +112,30 @@ migrateColumns('players', {
   rebounding: 'INTEGER DEFAULT 40',
   lifestyle: 'INTEGER DEFAULT 1',
   advisor_trust: 'INTEGER DEFAULT 65',
+  locker_actions_used: 'INTEGER DEFAULT 0',
+  pending_weekend: 'INTEGER DEFAULT 0',
+  pending_option: 'INTEGER DEFAULT 0',
+  second_life_years: 'INTEGER DEFAULT 0',
   growth: "TEXT DEFAULT 'steady'",
+  second_life: 'TEXT',
+  legacy_score: 'REAL DEFAULT 0',
+  s_fga_mid: 'REAL DEFAULT 0', p_fga_mid: 'REAL DEFAULT 0',
+  tactics_defense: "TEXT DEFAULT 'balanced'", tactics_offense: "TEXT DEFAULT 'balanced'",
+  life_values: "TEXT DEFAULT '{}'", flags: "TEXT DEFAULT '[]'",
+  goat_bonus: 'REAL DEFAULT 0',
+  media_pending: 'TEXT',
+  nationality: "TEXT DEFAULT 'USA'",
 });
 migrateColumns('ai_players', { growth: "TEXT DEFAULT 'steady'", injury_games: 'INTEGER DEFAULT 0', rest_games: 'INTEGER DEFAULT 0', salary: 'REAL DEFAULT 0' });
 migrateColumns('investments', { asset_type: "TEXT DEFAULT 'stocks'", lock_season: 'INTEGER DEFAULT 0' });
+migrateColumns('contracts', { player_option: 'INTEGER DEFAULT 0', no_trade: 'INTEGER DEFAULT 0' });
 migrateColumns('season_summaries', {
   p_games: 'INTEGER DEFAULT 0', p_ppg: 'REAL DEFAULT 0', p_rpg: 'REAL DEFAULT 0',
   p_apg: 'REAL DEFAULT 0', p_spg: 'REAL DEFAULT 0', p_bpg: 'REAL DEFAULT 0',
   p_topg: 'REAL DEFAULT 0', p_mpg: 'REAL DEFAULT 0', p_fg_pct: 'REAL DEFAULT 0',
   p_tp_pct: 'REAL DEFAULT 0', p_ft_pct: 'REAL DEFAULT 0',
 });
+migrateColumns('league_state', { intl_tournament: 'TEXT', game_mode: "TEXT DEFAULT 'classic'", lang: "TEXT DEFAULT 'en'" });
 
 // ------------------------------------------------------------
 // Helpers
@@ -159,6 +173,12 @@ function httpError(status, detail) { return new HttpError(status, detail); }
 function round1(v) { return Math.round(v * 10) / 10; }
 function round2(v) { return Math.round(v * 100) / 100; }
 function round3(v) { return Math.round(v * 1000) / 1000; }
+
+// Pick a localized string from an {en, zh} pair (or pass through a plain string).
+function pick(v, lang) {
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('en' in v || 'zh' in v)) return v[lang] || v.en || '';
+  return v;
+}
 
 // ------------------------------------------------------------
 // Team data
@@ -201,29 +221,37 @@ const ALL_TEAM_IDS = Object.keys(TEAMS).map(Number);
 // Position / build system
 // ------------------------------------------------------------
 const POSITION_PROFILES = {
-  PG: { label: 'Point Guard', icon: '🎯', height_range: [1.83, 1.96], weight_range: [77, 93], base_points: 260,
-        aptitudes: { athleticism: 45, defense: 40, scoring: 55, playmaking: 65, mental: 55 } },
-  SG: { label: 'Shooting Guard', icon: '🔥', height_range: [1.91, 2.03], weight_range: [84, 102], base_points: 250,
-        aptitudes: { athleticism: 45, defense: 40, scoring: 65, playmaking: 45, mental: 55 } },
-  SF: { label: 'Small Forward', icon: '⚡', height_range: [1.98, 2.08], weight_range: [93, 112], base_points: 245,
-        aptitudes: { athleticism: 50, defense: 50, scoring: 55, playmaking: 35, mental: 55 } },
-  PF: { label: 'Power Forward', icon: '💪', height_range: [2.03, 2.13], weight_range: [102, 122], base_points: 240,
-        aptitudes: { athleticism: 55, defense: 60, scoring: 45, playmaking: 25, mental: 55 } },
-  C:  { label: 'Center', icon: '🏔️', height_range: [2.08, 2.21], weight_range: [109, 136], base_points: 235,
-        aptitudes: { athleticism: 55, defense: 70, scoring: 35, playmaking: 20, mental: 55 } },
+  PG: { label: 'Point Guard', icon: '🎯', height_range: [1.83, 1.96], weight_range: [77, 93], base_points: 290,
+        aptitudes: { athleticism: 45, defense: 35, outside: 60, inside: 45, playmaking: 65, mental: 50 } },
+  SG: { label: 'Shooting Guard', icon: '🔥', height_range: [1.91, 2.03], weight_range: [84, 102], base_points: 280,
+        aptitudes: { athleticism: 45, defense: 40, outside: 65, inside: 50, playmaking: 40, mental: 50 } },
+  SF: { label: 'Small Forward', icon: '⚡', height_range: [1.98, 2.08], weight_range: [93, 112], base_points: 275,
+        aptitudes: { athleticism: 50, defense: 50, outside: 50, inside: 50, playmaking: 35, mental: 50 } },
+  PF: { label: 'Power Forward', icon: '💪', height_range: [2.03, 2.13], weight_range: [102, 122], base_points: 270,
+        aptitudes: { athleticism: 55, defense: 60, outside: 35, inside: 55, playmaking: 25, mental: 50 } },
+  C:  { label: 'Center', icon: '🏔️', height_range: [2.08, 2.21], weight_range: [109, 136], base_points: 265,
+        aptitudes: { athleticism: 55, defense: 70, outside: 25, inside: 50, playmaking: 20, mental: 50 } },
 };
 
 const ATTRIBUTE_CATEGORIES = {
+  outside: { label: 'Outside Scoring', icon: '🎯',
+    desc: 'Shooting from mid-range and beyond, plus free throws.',
+    attrs: ['mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'free_throw', 'off_ball'] },
+  inside: { label: 'Inside Scoring', icon: '🏀',
+    desc: 'Driving to the basket, finishing through contact, drawing fouls.',
+    attrs: ['first_step', 'finishing', 'drawing_fouls', 'ball_security'] },
   athleticism: { label: 'Athleticism', icon: '⚡',
+    desc: 'Raw physical tools — speed, strength, leaping, endurance.',
     attrs: ['vertical_jump', 'speed', 'lateral_quickness', 'strength', 'core_stability', 'stamina', 'durability'] },
-  scoring: { label: 'Scoring', icon: '🎯',
-    attrs: ['first_step', 'finishing', 'mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'off_ball', 'drawing_fouls', 'free_throw'] },
   playmaking: { label: 'Playmaking', icon: '👁️',
-    attrs: ['ball_security', 'pnr_vision', 'passing_accuracy'] },
+    desc: 'Running the offense — passing, court vision, pick-and-roll decisions.',
+    attrs: ['passing_accuracy', 'pnr_vision'] },
   defense: { label: 'Defense', icon: '🛡️',
-    attrs: ['perimeter_defense', 'help_defense', 'steal', 'rim_protection', 'box_out'] },
-  mental: { label: 'Basketball IQ', icon: '🧠',
-    attrs: ['bbiq', 'clutch_factor', 'work_ethic', 'leadership', 'composure'] },
+    desc: 'Guarding the ball, protecting the rim, disrupting passing lanes.',
+    attrs: ['perimeter_defense', 'help_defense', 'rim_protection', 'steal', 'box_out', 'rebounding'] },
+  mental: { label: 'Intangibles', icon: '🧠',
+    desc: 'Basketball IQ, clutch, composure, work ethic, leadership.',
+    attrs: ['bbiq', 'clutch_factor', 'composure', 'work_ethic', 'leadership'] },
 };
 
 // Default on-court role per position — ball-handlers get playmaking-friendly roles.
@@ -312,8 +340,8 @@ function calculatePointPool(position, height, weight, luckBonus = null) {
   const totalPoints = base + heightBonus + weightBonus + luck;
 
   const aptitudes = { ...profile.aptitudes };
-  if (hDev > 0.3) { aptitudes.defense += 3; aptitudes.athleticism += 2; aptitudes.scoring -= 2; }
-  else if (hDev < -0.3) { aptitudes.scoring += 3; aptitudes.playmaking += 2; aptitudes.defense -= 2; }
+  if (hDev > 0.3) { aptitudes.defense += 3; aptitudes.athleticism += 2; aptitudes.inside -= 2; aptitudes.outside -= 2; }
+  else if (hDev < -0.3) { aptitudes.outside += 3; aptitudes.inside += 2; aptitudes.playmaking += 2; aptitudes.defense -= 2; }
 
   return { total_points: totalPoints, base, height_bonus: heightBonus, weight_bonus: weightBonus,
            luck_bonus: luck, aptitudes, height_deviation: round2(hDev), weight_deviation: round2(wDev) };
@@ -330,7 +358,7 @@ function generateStaticPhysicals(position, height, weight) {
   return { wingspan, standing_reach: standingReach, hand_size: handSize, frame_build: frame, body_fat_pct: bodyFat };
 }
 
-function createPlayerWithPoints(name, position, age, height, weight, allocations, luckBonus = null, background = 'small_town') {
+function createPlayerWithPoints(name, position, age, height, weight, allocations, luckBonus = null, background = 'small_town', nationality = 'USA') {
   const pid = crypto.randomBytes(4).toString('hex');
   const poolInfo = calculatePointPool(position, height, weight, luckBonus);
   const attrs = {};
@@ -379,6 +407,12 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
   adj('lateral_quickness', -hDev * 6);
   adj('strength', wDev * 14 - hDev * 6);        // weight relative to height → strength
   adj('core_stability', wDev * 6);
+  // Position shapes the defensive archetype: bigs protect the rim but struggle on
+  // the perimeter; guards chase ball-handlers but can't challenge at the rim.
+  const pd = POSITION_DEFENSE[position] || { blk: 1, stl: 1 };
+  adj('rim_protection', Math.round((pd.blk - 1) * 18));    // C(1.8)→+14, PG(0.12)→−16
+  adj('perimeter_defense', Math.round((1 - pd.blk) * 10)); // C→−8, PG→+9
+  adj('steal', Math.round((pd.stl - 1) * 12));             // PG(1.6)→+7, C(0.45)→−7
 
   const growth = rollGrowthArchetype(bg, attrs.work_ethic ?? 50);
   const g = (k, d) => attrs[k] ?? d;
@@ -389,7 +423,7 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
     'first_step', 'finishing', 'mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'off_ball', 'drawing_fouls',
     'ball_security', 'pnr_vision', 'passing_accuracy', 'free_throw',
     'bbiq', 'clutch_factor', 'work_ethic', 'leadership', 'composure',
-    'fan_base', 'morale', 'background'];
+    'fan_base', 'morale', 'background', 'nationality'];
   const vals = [pid, name, position, role, height, weight, age, teamId, jersey,
     phys.wingspan, phys.standing_reach, phys.hand_size, phys.frame_build, phys.body_fat_pct, potential, growth,
     g('vertical_jump', 45), g('speed', 45), g('lateral_quickness', 45), g('strength', 45), g('core_stability', 45), g('stamina', 55), g('durability', 55),
@@ -397,7 +431,7 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
     g('first_step', 40), g('finishing', 40), g('mid_range', 40), g('catch_shoot_3pt', 35), g('pull_up_3pt', 30), g('off_ball', 40), g('drawing_fouls', 35),
     g('ball_security', 45), g('pnr_vision', 40), g('passing_accuracy', 40), g('free_throw', 65),
     g('bbiq', 50), g('clutch_factor', 50), g('work_ethic', 50), g('leadership', 40), g('composure', 50),
-    fanBase, morale, bg];
+    fanBase, morale, bg, nationality];
 
   db.prepare(`INSERT INTO players (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals);
   const sal = round1(randRange(1.0, 8.0));
@@ -472,12 +506,13 @@ function weightedPick(pop, weights) {
 }
 
 function calculateOverallRating(player) {
-  const scoring = (player.first_step + player.finishing + player.mid_range + player.catch_shoot_3pt + player.pull_up_3pt) / 5;
-  const playmaking = (player.ball_security + player.pnr_vision + player.passing_accuracy) / 3;
-  const defense = (player.perimeter_defense + player.help_defense + player.steal + player.rim_protection + player.box_out) / 5;
+  const outside = (player.mid_range + player.catch_shoot_3pt + player.pull_up_3pt + player.free_throw + player.off_ball) / 5;
+  const inside = (player.first_step + player.finishing + player.drawing_fouls + player.ball_security) / 4;
+  const playmaking = (player.passing_accuracy + player.pnr_vision) / 2;
+  const defense = (player.perimeter_defense + player.help_defense + player.rim_protection + player.steal + player.box_out + player.rebounding) / 6;
   const athleticism = (player.vertical_jump + player.speed + player.lateral_quickness + player.strength + player.stamina) / 5;
   const mental = (player.bbiq + player.clutch_factor + player.composure) / 3;
-  return clamp(Math.round(scoring * 0.35 + playmaking * 0.15 + defense * 0.2 + athleticism * 0.2 + mental * 0.1), 25, 95);
+  return clamp(Math.round(outside * 0.15 + inside * 0.20 + playmaking * 0.15 + defense * 0.20 + athleticism * 0.20 + mental * 0.10), 25, 95);
 }
 
 // ------------------------------------------------------------
@@ -511,12 +546,42 @@ function consistencyRating(p) {
   return clamp(Math.round((p.composure ?? 50) * 0.7 + (p.bbiq ?? 50) * 0.3), 20, 99);
 }
 
-function buildDraftOrder() {
-  // 60 picks: 30 in the first round (14 lottery + 16 non-lottery) then 30 in the second.
-  const lottery = simulateDraftLottery();
-  const firstRound = lottery.concat(Array.from({ length: 16 }, (_, i) => i + 15));
-  const secondRound = Array.from({ length: 30 }, (_, i) => 30 - i);
-  return firstRound.concat(secondRound);
+function buildDraftOrder(playerId) {
+  // Draft order is now driven by the prior season's records: the 14 worst teams
+  // enter a weighted lottery (worst team = best odds), the 16 playoff teams pick
+  // after them (worst-first), and the second round reverses the order.
+  const season = getLeagueState(playerId).current_season;
+  let rows = db.prepare('SELECT team_id, wins FROM team_records WHERE player_id=? AND season_number=?').all(playerId, Math.max(1, season - 1));
+  if (!rows.length) rows = db.prepare('SELECT team_id, wins FROM team_records WHERE player_id=? AND season_number=?').all(playerId, season);
+  const rec = new Map(rows.map(r => [r.team_id, r.wins || 0]));
+  // No records yet (first season) → fall back to static team OVR, weakest first.
+  const ranked = ALL_TEAM_IDS.slice().sort((a, b) => {
+    const hasA = rec.has(a), hasB = rec.has(b);
+    if (hasA && hasB) return rec.get(a) - rec.get(b) || a - b;
+    if (hasA) return -1;
+    if (hasB) return 1;
+    return (TEAMS[a].ovr - TEAMS[b].ovr) || a - b;
+  });
+  const lotteryTeams = ranked.slice(0, 14);
+  const nonLottery = ranked.slice(14); // playoff teams, worst-first
+  const weights = [140, 140, 140, 125, 105, 90, 75, 60, 45, 30, 20, 15, 10, 5];
+  const order = [];
+  const avail = lotteryTeams.slice();
+  for (let i = 0; i < 4; i++) {
+    const w = avail.map(tid => weights[lotteryTeams.indexOf(tid)]);
+    const idx = weightedPickIndex(w);
+    order.push(avail.splice(idx, 1)[0]);
+  }
+  order.push(...avail);     // remaining lottery teams, worst-first
+  order.push(...nonLottery); // playoff teams, worst-first
+  return order.concat(order.slice().reverse()).slice(0, 60);
+}
+
+function weightedPickIndex(weights) {
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < weights.length; i++) { r -= weights[i]; if (r <= 0) return i; }
+  return weights.length - 1;
 }
 
 function simulateDraft(playerId) {
@@ -524,7 +589,7 @@ function simulateDraft(playerId) {
   if (!player) throw httpError(404, 'Player not found');
   const overall = calculateOverallRating(player);
   const draftClass = generateDraftClass();
-  const draftOrder = buildDraftOrder();
+  const draftOrder = buildDraftOrder(playerId);
   const combineSwing = randInt(-8, 8);
   const draftStock = clamp(overall + combineSwing, 25, 95);
   const allProspects = draftClass.map(p => ({ ...p })).concat([
@@ -543,6 +608,7 @@ function simulateDraft(playerId) {
       .run(twTeam, 0.5, 1.5, playerId);
     db.prepare('INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)')
       .run(playerId, season, 'event', `Went undrafted and signed a two-way deal with ${TEAMS[twTeam].name}.`);
+    syncTeammates(playerId, true);
     return { undrafted: true, draft_position: 0, draft_round: 0, team: TEAMS[twTeam].name, team_abbr: TEAMS[twTeam].abbr,
              combine_swing: combineSwing, draft_stock: draftStock, rookie_salary: 0.5, top_prospects: allProspects.slice(0, 10) };
   }
@@ -558,6 +624,7 @@ function simulateDraft(playerId) {
     .run(draftedTeamId, draftPosition, season, 2 + draftPosition * 0.3, 3 + draftPosition * 0.5, playerId);
   db.prepare('UPDATE contracts SET team_id=?,annual_salary=?,total_value=? WHERE player_id=? AND season_number=0')
     .run(draftedTeamId, salary, salary * 3, playerId);
+  syncTeammates(playerId, true);
 
   return { draft_position: draftPosition, draft_round: draftRound, team: draftedTeam.name, team_abbr: draftedTeam.abbr,
            combine_swing: combineSwing, draft_stock: draftStock, rookie_salary: salary, top_prospects: allProspects.slice(0, 10) };
@@ -586,14 +653,34 @@ function calculateMinutes(player, overall, isPlayoff = false, fatiguePenalty = 0
   if (player.load_management) mpg -= 8;
   if (isPlayoff) mpg += 4;
   mpg -= fatiguePenalty * 10;
+  // Form shifts minutes: a hot hand earns more run, a cold spell loses it.
+  mpg += (player.hot_streak || 0) * 1.2 + (player.cold_streak || 0) * 1.2;
   // Consistency steadies minutes: high-consistency players play near their base
   // every night; low-consistency players see wider swings.
   const consistency = consistencyRating(player);
-  mpg += randRange(-3, 3) * (1 - consistency / 100 * 0.6);
-  return round1(clamp(mpg, 6, 42));
+  mpg += randRange(-5, 5) * (1 - consistency / 100 * 0.6);
+  return round1(clamp(mpg, 5, 42));
 }
 
-function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome = null) {
+// Pre-game tactics: the player picks a defensive scheme and an offensive pace.
+// Each is a trade-off — nothing is free. `tactics_defense`/`tactics_offense`
+// live on the player row; 'balanced' leaves the game unchanged.
+function tacticModifiers(player) {
+  const t = { poss: 0, oppScore: 1, oppThree: 1, oppAst: 1, myThree: 1, myTwo: 1, myTov: 1, fatigue: 0 };
+  const d = player.tactics_defense || 'balanced';
+  const o = player.tactics_offense || 'balanced';
+  // Defense: each scheme cuts opponent scoring a different way, but leaks elsewhere.
+  if (d === 'lockdown_star') { t.oppScore = 0.94; t.oppThree = 1.25; }       // over-commit to their star → open threes
+  else if (d === 'protect_paint') { t.oppScore = 0.95; t.oppThree = 1.4; }   // pack the paint → dare them to shoot
+  else if (d === 'switch_everything') { t.oppScore = 0.96; t.oppAst = 0.7; t.fatigue += 5; } // switch all screens → kill passing, tire yourself
+  // Offense: pace and shot mix trade-offs.
+  if (o === 'push_pace') { t.poss = 16; t.fatigue += 5; t.oppScore *= 1.03; } // run — both teams score more, you wear down
+  else if (o === 'grind_halfcourt') { t.poss = -12; t.myTov = 0.8; t.fatigue -= 4; } // slow it down → fewer possessions/turnovers, less wear
+  else if (o === 'three_heavy') { t.myThree = 1.5; t.myTwo = 0.9; }          // live by the three → more variance
+  return t;
+}
+
+function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome = null, secondHalfMods = null) {
   const player = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!player) throw httpError(404, 'Player not found');
   const state = getLeagueState(playerId);
@@ -607,8 +694,13 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
     const idx = Math.min(state.games_played_in_season, 81);
     opponentTeamId = schedule[idx];
   }
-  const opp = TEAMS[opponentTeamId] || TEAMS[1];
-  const team = TEAMS[player.team_id] || TEAMS[1];
+  // Override the frozen static ratings with LIVE roster strength (spread copy so
+  // the global TEAMS table is never mutated) — the sim must reflect the evolved
+  // league and the player's own rating, not season-1 numbers.
+  const oppLive = teamOffDef(playerId, opponentTeamId);
+  const teamLive = teamOffDef(playerId, player.team_id);
+  const opp = { ...(TEAMS[opponentTeamId] || TEAMS[1]), off: oppLive.off, def: oppLive.def };
+  const team = { ...(TEAMS[player.team_id] || TEAMS[1]), off: teamLive.off, def: teamLive.def };
 
   // Relationship health nudges on-court composure/clutch (and morale, below).
   const lifeBuffs = lifeBondBuffs(playerId);
@@ -637,18 +729,22 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   let streakMod = 0;
   if (player.hot_streak > 0) streakMod = Math.min(player.hot_streak * 2.5, 15) * streakScale;
   else if (player.cold_streak < 0) streakMod = Math.max(player.cold_streak * 2.5, -15) * streakScale;
+  // Morale nudges shot-making: low morale saps the whole team's consistency,
+  // high morale steadies it. A small ±3–6% swing around the 75 baseline.
+  const moraleMod = clamp(1 + ((player.morale ?? 75) - 75) / 400, 0.94, 1.06);
 
   const roleUsage = { 'Ball-Dominant Creator': 0.33, 'Off-Ball Finisher': 0.21, 'Rim Protector': 0.14, 'Two-Way Wing': 0.25, '3-and-D Specialist': 0.17, 'Point Forward': 0.28, 'Stretch Big': 0.19, 'Defensive Anchor': 0.12 };
   let usageRate = roleUsage[player.role] ?? 0.24;
   usageRate *= clamp(0.5 + (overall - 40) / 70.0, 0.5, 1.3);
 
-  const totalPoss = randInt(195, 210);
+  const tactics = tacticModifiers(player);
+  const totalPoss = clamp(randInt(195, 210) + tactics.poss, 150, 240);
   const courtPct = minutes / 48.0;
-  const box = { pts: 0, oreb: 0, dreb: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, fta: 0, ftm: 0 };
+  const box = { pts: 0, oreb: 0, dreb: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, fta: 0, ftm: 0, fga_mid: 0 };
   // Team box scores (teammates only for now; the player's line is folded in at the end).
   const teamBox = { reb: 0, ast: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0 };
   const oppBox = { reb: 0, ast: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0 };
-  const home = isHome != null ? isHome : Math.random() < 0.5;
+  const home = isHome != null ? isHome : homeSchedule(player.team_id, playerId)[Math.min(state.games_played_in_season, 81)];
   // Home-court advantage: a modest ~2.5-point scoring edge for the home team.
   const teamOff = team.off + (home ? 2.5 : 0), oppDef = opp.def;
   const oppOff = opp.off - (home ? 2.5 : 0), teamDef = team.def;
@@ -658,7 +754,7 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   const qT = [0, 0, 0, 0], qO = [0, 0, 0, 0];
   let qStartT = 0, qStartO = 0, qi = 0;
 
-  const TOV_RATE = 0.12;
+  const TOV_RATE = 0.12 * tactics.myTov;
   let fouledOut = false, foulOutPos = totalPoss;
   for (let posNum = 1; posNum <= totalPoss; posNum++) {
     const isClutch = (posNum > totalPoss - 15) && Math.abs(teamScore - oppScore) <= 8;
@@ -669,14 +765,17 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
       // Team chemistry (bond-driven, blended with leadership) makes teammates shoot a touch better/worse.
       const effChem = clamp((player._avgBond ?? player.chemistry ?? 50) * 0.7 + (player.leadership || 40) * 0.3, 0, 100);
       const chemMod = 1 + (effChem - 50) / 250.0;
-      const baseProb = teamOff / 155.0 * defFactor * 0.68 * chemMod;
+      const baseProb = teamOff / 155.0 * defFactor * 0.68 * chemMod * moraleMod;
       const playerInvolved = playerOn && Math.random() < usageRate * 1.25;
       if (Math.random() < TOV_RATE) {
         // Turnover ends the possession before a shot.
         teamBox.tov += 1;
       } else if (playerInvolved) {
         const action = determineAction(player, isClutch, streakMod);
-        const result = resolveAction(player, action, opp, isClutch, streakMod);
+        const result = resolveAction(player, action, opp, isClutch, streakMod, moraleMod);
+        // Shot-location tracking: only the non-three catch-and-shoot is a true
+        // mid-range jumper; every other two is at the rim (drive/cut/post/putback).
+        if (result.fga > 0 && result.tpa === 0 && action === 'catch_shoot') box.fga_mid += 1;
         updateBox(box, result);
         if (result.points > 0) teamScore += result.points;
         if (result.assist > 0) teamScore += result.assist_points;
@@ -688,9 +787,9 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
       } else {
         // Teammate possession.
         teamBox.fga += 1;
-        const isThree = Math.random() < 0.28;
+        const isThree = Math.random() < 0.28 * tactics.myThree;
         if (isThree) teamBox.tpa += 1;
-        if (Math.random() < baseProb) {
+        if (Math.random() < baseProb * (isThree ? 1 : tactics.myTwo)) {
           teamBox.fgm += 1;
           if (isThree) { teamBox.tpm += 1; teamScore += 3; } else teamScore += 2;
           if (Math.random() < 0.6) teamBox.ast += 1;
@@ -702,21 +801,21 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
       }
     } else {
       const defFactor = 1 + (teamDef - 110) / 220.0;
-      const oppProb = oppOff / 155.0 * defFactor * 0.68;
+      const oppProb = oppOff / 155.0 * defFactor * 0.68 * tactics.oppScore;
       if (Math.random() < TOV_RATE) {
         // Opponent turnover -> our steal chance.
         oppBox.tov += 1;
         if (playerOn) box.stl += rollSteal(player, isClutch);
       } else {
         oppBox.fga += 1;
-        const isThree = Math.random() < 0.25;
+        const isThree = Math.random() < 0.25 * tactics.oppThree;
         if (isThree) oppBox.tpa += 1;
         let blocked = false;
         if (playerOn && rollBlock(player)) { box.blk += 1; blocked = true; }
         if (!blocked && Math.random() < oppProb) {
           oppBox.fgm += 1;
           if (isThree) { oppBox.tpm += 1; oppScore += 3; } else oppScore += 2;
-          if (Math.random() < 0.6) oppBox.ast += 1;
+          if (Math.random() < 0.6 * tactics.oppAst) oppBox.ast += 1;
         } else if (playerOn && rollDefReb(player)) {
           box.dreb += 1; teamBox.reb += 1;
         } else {
@@ -730,6 +829,13 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
     if (posNum === quarterEnd[qi]) {
       qT[qi] = teamScore - qStartT; qO[qi] = oppScore - qStartO;
       qStartT = teamScore; qStartO = oppScore; qi++;
+      // Halftime coaching adjustments: second_half_mods apply from Q3 onward.
+      if (qi === 2 && secondHalfMods) {
+        if (secondHalfMods.aggressive) usageRate *= 1.15;
+        if (secondHalfMods.defensive) { tactics.oppScore *= 0.95; }
+        if (secondHalfMods.three_push) tactics.myThree *= 1.3;
+        if (secondHalfMods.slow_down) { tactics.poss -= 8; tactics.myTov *= 0.85; }
+      }
     }
   }
 
@@ -749,7 +855,7 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   // (each possession is otherwise an independent, high-variance coin flip).
   const expTeam = clamp(team.off + (team.off - opp.def) * 0.4 + (home ? 2.5 : 0), 85, 135);
   const expOpp = clamp(opp.off + (opp.off - team.def) * 0.4 + (home ? -2.5 : 0), 85, 135);
-  const STAB = 0.4;
+  const STAB = 0.55;
   teamScore = Math.round(teamScore * (1 - STAB) + expTeam * STAB);
   oppScore = Math.round(oppScore * (1 - STAB) + expOpp * STAB);
   const tRaw = qT.reduce((a, b) => a + b, 0) || 1;
@@ -772,7 +878,7 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   const plusMinus = minutes > 0 ? teamScore - oppScore : 0;
   const result = teamScore > oppScore ? 'W' : 'L';
 
-  const newFatigue = clamp(player.fatigue + (minutes / 40.0) * randRange(3, 7), 0, 100);
+  const newFatigue = clamp(player.fatigue + (minutes / 40.0) * randRange(3, 7) + tactics.fatigue, 0, 100);
   let newHot = player.hot_streak, newCold = player.cold_streak;
   if (box.pts >= 28) { newHot = Math.min(newHot + 2, 5); newCold = 0; }
   else if (box.pts >= 20) { newHot = Math.min(newHot + 1, 5); newCold = 0; }
@@ -793,9 +899,10 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   if (minutes > 0 && Math.random() < (injRisk / 100.0) * 0.045) {
     const sev = Math.random();
     if (sev < 0.50) injury = ['Minor sprain', randInt(1, 3)];
-    else if (sev < 0.78) injury = ['Moderate strain', randInt(4, 10)];
-    else if (sev < 0.94) injury = ['Serious sprain', randInt(11, 20)];
-    else injury = ['Major injury', randInt(21, 35)];
+    else if (sev < 0.76) injury = ['Moderate strain', randInt(4, 10)];
+    else if (sev < 0.92) injury = ['Serious sprain', randInt(11, 20)];
+    else if (sev < 0.98) injury = ['Major injury', randInt(21, 40)];
+    else injury = ['Season-ending injury', randInt(60, 82)];
   }
 
   const moraleDelta = (result === 'W' ? 1 : -1) * randInt(1, 3);
@@ -827,15 +934,15 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
 
   // Accumulate the box score into the right bucket: regular season (s_*) or playoffs (p_*).
   const B = isPlayoff ? 'p' : 's';
-  db.prepare(`UPDATE players SET ${B}_pts=${B}_pts+?, ${B}_reb=${B}_reb+?, ${B}_ast=${B}_ast+?, ${B}_stl=${B}_stl+?, ${B}_blk=${B}_blk+?, ${B}_tov=${B}_tov+?, ${B}_fga=${B}_fga+?, ${B}_fgm=${B}_fgm+?, ${B}_3pa=${B}_3pa+?, ${B}_3pm=${B}_3pm+?, ${B}_fta=${B}_fta+?, ${B}_ftm=${B}_ftm+?, ${B}_games=${B}_games+?, ${B}_min=${B}_min+?, ${B}_pf=${B}_pf+?, fatigue=?, injury_risk=?, morale=?, hot_streak=?, cold_streak=?, ${B}_wins=${B}_wins+?, ${B}_losses=${B}_losses+?, injury_status=?, injury_games_remaining=?, injury_treatment=? WHERE id=?`)
-    .run(box.pts, box.reb, box.ast, box.stl, box.blk, box.tov, box.fga, box.fgm, box.tpa, box.tpm, box.fta, box.ftm,
+  db.prepare(`UPDATE players SET ${B}_pts=${B}_pts+?, ${B}_reb=${B}_reb+?, ${B}_ast=${B}_ast+?, ${B}_stl=${B}_stl+?, ${B}_blk=${B}_blk+?, ${B}_tov=${B}_tov+?, ${B}_fga=${B}_fga+?, ${B}_fgm=${B}_fgm+?, ${B}_3pa=${B}_3pa+?, ${B}_3pm=${B}_3pm+?, ${B}_fga_mid=${B}_fga_mid+?, ${B}_fta=${B}_fta+?, ${B}_ftm=${B}_ftm+?, ${B}_games=${B}_games+?, ${B}_min=${B}_min+?, ${B}_pf=${B}_pf+?, fatigue=?, injury_risk=?, morale=?, hot_streak=?, cold_streak=?, ${B}_wins=${B}_wins+?, ${B}_losses=${B}_losses+?, injury_status=?, injury_games_remaining=?, injury_treatment=? WHERE id=?`)
+    .run(box.pts, box.reb, box.ast, box.stl, box.blk, box.tov, box.fga, box.fgm, box.tpa, box.tpm, box.fga_mid, box.fta, box.ftm,
       played, minutes, box.pf, newFatigue, injRisk, newMorale, newHot, newCold,
       result === 'W' ? 1 : 0, result === 'L' ? 1 : 0, newInjStatus, newInjGames, newInjTreatment, playerId);
   db.prepare('UPDATE league_state SET games_played_in_season=games_played_in_season+1 WHERE player_id=?').run(playerId);
 
   // League-wide simulation + mid-season development + rare career events only
   // happen during the regular season (not playoff games).
-  let development = null, event = null, allStar = null;
+  let development = null, event = null, allStar = null, passiveTrade = null, allStarWeekend = null;
   if (!isPlayoff) {
     const after = db.prepare('SELECT s_wins, s_losses FROM players WHERE id=?').get(playerId);
     // Injuries tick every 3rd league game (they last multiple games anyway).
@@ -844,19 +951,61 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
     development = maybeDevelop(playerId);
     event = maybeCareerEvent(playerId);
     allStar = maybeAllStar(playerId);
+    passiveTrade = maybePassiveTrade(playerId);
+    allStarWeekend = maybeAllStarWeekend(playerId);
   }
 
   // Locker room bonds drift with the result.
   driftBonds(playerId, result);
 
+  const recordsBroken = checkGameRecords(box);
+  for (const r of recordsBroken) logRecordBroken(playerId, state.current_season, r);
+
+  // A notable night draws the media — set a pending interview. Media only fires
+  // on big moments now (not randomly), so it becomes part of the story.
+  let mediaNotable = null;
+  if (recordsBroken.length > 0) {
+    const rec = recordsBroken[0];
+    mediaNotable = { type: 'record', label: rec.label, achieved: rec.achieved };
+  } else if (allStar) {
+    mediaNotable = { type: 'allstar' };
+  } else if (box.pts >= 50) {
+    mediaNotable = { type: '50pts', pts: box.pts };
+  } else if (box.pts >= 10 && box.reb >= 10 && box.ast >= 10) {
+    mediaNotable = { type: 'triple_double', pts: box.pts, reb: box.reb, ast: box.ast };
+  }
+  if (mediaNotable) db.prepare('UPDATE players SET media_pending=? WHERE id=?').run(JSON.stringify(mediaNotable), playerId);
+
+  // Personal best + franchise record — "reachable" milestones that fire often
+  // and give small, frequent moments of progress (unlike the legend records).
+  const prevHigh = db.prepare('SELECT MAX(pts) pts FROM game_logs WHERE player_id=?').get(playerId)?.pts || 0;
+  const personalRecord = box.pts > prevHigh && box.pts >= 20;
+  if (personalRecord) {
+    db.prepare('UPDATE players SET clout=MIN(100,clout+1) WHERE id=?').run(playerId);
+    db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,'event',?)")
+      .run(playerId, state.current_season, `New career high: ${box.pts} points.`);
+  }
+  const franchiseMark = FRANCHISE_RECORDS[player.team_id];
+  let franchiseRecord = false;
+  if (franchiseMark && box.pts > franchiseMark) {
+    const seen = db.prepare('SELECT id FROM career_progress WHERE player_id=? AND milestone=?').get(playerId, 'franchise_pts');
+    if (!seen) {
+      db.prepare('UPDATE players SET clout=MIN(100,clout+3), fan_base=MIN(100,fan_base+3) WHERE id=?').run(playerId);
+      db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description,milestone) VALUES (?,?,'event',?,?)")
+        .run(playerId, state.current_season, `Broke the franchise single-game scoring record: ${box.pts} points.`, 'franchise_pts');
+      franchiseRecord = true;
+    }
+  }
+  const lifeIntro = hasIntroLifeEvent(playerId);
+
   return { game_number: gameNumber, opponent: opp.name, opponent_abbr: opp.abbr, result, is_home: home ? 1 : 0,
            overtime: overtime > 0 ? overtime : null,
-           team_score: teamScore, opponent_score: oppScore, minutes, box_score: box, advanced: adv, plus_minus: plusMinus,
+           team_score: teamScore, opponent_score: oppScore, minutes, box_score: box, advanced: adv, plus_minus: plusMinus, records_broken: recordsBroken, personal_record: personalRecord, franchise_record: franchiseRecord, life_intro: lifeIntro,
            quarters: { team: qT, opp: qO }, team_box: teamBox, opp_box: oppBox,
            fatigue: round1(newFatigue), injury: newInjStatus ? { type: newInjStatus, games: newInjGames } : null,
            fouled_out: fouledOut,
            morale: newMorale, hot_streak: newHot, cold_streak: newCold,
-           development, event, all_star: allStar };
+           development, event, all_star: allStar, passive_trade: passiveTrade, allstar_weekend: allStarWeekend };
 }
 
 function determineAction(player, isClutch, streakMod) {
@@ -887,10 +1036,10 @@ function assistConvert(player) {
   return clamp(((passing + vision) / 300.0 + 0.18) * connection, 0.25, 0.95);
 }
 
-function resolveAction(player, action, opp, isClutch, streakMod) {
+function resolveAction(player, action, opp, isClutch, streakMod, moraleMod = 1) {
   const r = { points: 0, fgm: 0, fga: 0, tpa: 0, tpm: 0, fta: 0, ftm: 0, tov: 0, assist: 0, assist_points: 0 };
   const defFactor = opp.def / 110.0;
-  const stk = 1 + streakMod / 100.0;
+  const stk = (1 + streakMod / 100.0) * moraleMod;
   const cl = isClutch ? 1 + (player.clutch_factor - 50) / 180.0 : 1.0;
 
   if (action === 'iso_score') {
@@ -1079,6 +1228,16 @@ function generateSeasonSchedule(teamId, playerId) {
   return schedule.slice(0, 82);
 }
 
+// Deterministic 41-home / 41-away pattern for a team's season (seeded so it's
+// stable within a season). Replaces the old coin-flip "home court".
+function homeSchedule(teamId, playerId) {
+  const seed = teamId * 991 + (getLeagueState(playerId).current_season || 1) * 173;
+  const rng = mulberry32(seed);
+  const pattern = Array(41).fill(true).concat(Array(41).fill(false));
+  shuffleSeeded(rng, pattern);
+  return pattern;
+}
+
 // Seeded RNG (mulberry32) so schedules are stable within a season.
 function mulberry32(a) {
   return function () {
@@ -1191,6 +1350,15 @@ function teamSalary(playerId, teamId) {
   return round1(ai);
 }
 
+// Rough win/championship projection from a team's live strength, used to make
+// "join a contender" offers concrete.
+function teamProjection(playerId, teamId) {
+  const s = teamStrength(playerId, teamId);
+  const projWins = Math.round(clamp(25 + (s - 55) * 1.2, 12, 64));
+  const titlePct = Math.round(clamp((s - 74) * 3, 0, 35));
+  return { proj_wins: projWins, title_pct: titlePct };
+}
+
 // Scouting report for a team: current strength + its top (healthy) players.
 function teamRoster(playerId, teamId) {
   ensureLeaguePlayers(playerId);
@@ -1244,10 +1412,95 @@ function teamStrength(playerId, teamId) {
   return round1(top.reduce((s, v) => s + v, 0) / top.length);
 }
 
+// Convert LIVE roster strength (~50-95) onto the engine's off/def scale
+// (~90-130). This is what makes simulateGame reflect the evolved league (and
+// the player's own rating) instead of the frozen season-1 static ratings, which
+// was why weak teams could sweep strong ones. A little static off/def identity
+// is preserved via the "lean" so teams don't all play the same.
+function teamOffDef(playerId, teamId) {
+  const s = teamStrength(playerId, teamId);
+  const t = TEAMS[teamId] || { off: 110, def: 110 };
+  const base = 55 + s * 0.7;
+  const lean = (t.off - t.def) * 0.5;
+  return { off: clamp(base + lean, 88, 132), def: clamp(base - lean, 88, 132) };
+}
+
 function topAIPlayers(playerId, limit = 20) {
   ensureLeaguePlayers(playerId);
-  const rows = db.prepare('SELECT id,name,position,team_id,age,overall,potential,injury_games,rest_games FROM ai_players WHERE player_id=? AND retired=0 ORDER BY overall DESC LIMIT ?').all(playerId, limit);
+  const rows = db.prepare('SELECT id,name,position,team_id,age,overall,potential,injury_games,rest_games,salary FROM ai_players WHERE player_id=? AND retired=0 ORDER BY overall DESC LIMIT ?').all(playerId, limit);
   return rows.map(r => ({ ...r, team: (TEAMS[r.team_id] || {}).name || 'Team', team_abbr: (TEAMS[r.team_id] || {}).abbr || '—' }));
+}
+
+// The MVP race: rank the player against the league's best AI stars by a single
+// "production × winning" score, so awards feel like a competition, not a threshold.
+function aiWinPct(playerId, teamId) {
+  const season = getLeagueState(playerId).current_season;
+  const rec = db.prepare('SELECT wins, losses FROM team_records WHERE player_id=? AND team_id=? AND season_number=?').get(playerId, teamId, season);
+  const w = rec?.wins || 0, l = rec?.losses || 0;
+  return (w + l) > 0 ? w / (w + l) : 0.5;
+}
+
+function mvpScoreFrom(production, winPct) {
+  return round1(production * (0.5 + winPct));
+}
+
+function mvpRace(playerId) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  const g = Math.max(1, p.s_games);
+  const star = p.s_pts / g + p.s_reb / g * 0.8 + p.s_ast / g * 0.8 + p.s_stl / g * 1.5 + p.s_blk / g * 1.5;
+  const pW = (p.s_wins + p.s_losses) > 0 ? p.s_wins / (p.s_wins + p.s_losses) : 0.5;
+  const race = [{ name: p.name, team_abbr: (TEAMS[p.team_id] || {}).abbr || '—', score: mvpScoreFrom(star, pW), is_player: true }];
+  for (const a of topAIPlayers(playerId, 10)) {
+    race.push({ name: a.name, team_abbr: a.team_abbr, score: mvpScoreFrom(a.overall * 0.45, aiWinPct(playerId, a.team_id)), is_player: false });
+  }
+  race.sort((a, b) => b.score - a.score);
+  return race.slice(0, 5);
+}
+
+// The best AI MVP score this season — the bar the player must clear to win MVP.
+function topAiMvpScore(playerId) {
+  let top = 0;
+  for (const a of topAIPlayers(playerId, 10)) {
+    top = Math.max(top, mvpScoreFrom(a.overall * 0.45, aiWinPct(playerId, a.team_id)));
+  }
+  return top;
+}
+
+// Stat leaders: the player's real per-game numbers vs the AI league. Points/
+// rebounds/assists are overall-driven (stars lead those); steals and blocks are
+// specialty rolls, so we rank against the FULL AI pool — a defensive specialist
+// can lead steals/blocks without being a top-overall star.
+// A stable per-player "specialty" roll (long-tail): steal/block leaders are
+// specialists, not just the highest-overall stars. `power` skews the tail —
+// higher power = rarer high values (most players cluster low, a few spike).
+// Seeded from the player's row id so it stays constant for a whole career.
+function aiDefSpec(seedStr, power) {
+  const rng = mulberry32(hashSalt(seedStr));
+  return Math.pow(rng(), power);
+}
+
+function aiPerGameStats(overall, id) {
+  const stealSpec = aiDefSpec(`steal:${id}`, 3);
+  const blockSpec = aiDefSpec(`block:${id}`, 24);
+  return {
+    ppg: round1(clamp(overall * 0.32 - 4, 4, 32)),
+    rpg: round1(clamp(overall * 0.12 - 2, 1, 12)),
+    apg: round1(clamp(overall * 0.11 - 2, 1, 10)),
+    spg: round1(clamp(overall * 0.006 + stealSpec * 1.9, 0.3, 2.6)),
+    bpg: round1(clamp(overall * 0.004 + blockSpec * 2.9, 0.2, 3.6)),
+  };
+}
+
+function statLeaders(playerId) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  const g = Math.max(1, p.s_games);
+  const rows = [{ name: p.name, team_abbr: (TEAMS[p.team_id] || {}).abbr || '—', ppg: round1(p.s_pts / g), rpg: round1(p.s_reb / g), apg: round1(p.s_ast / g), spg: round1(p.s_stl / g), bpg: round1(p.s_blk / g), is_player: true }];
+  for (const a of topAIPlayers(playerId, 1000)) {
+    const s = aiPerGameStats(a.overall, a.id);
+    rows.push({ name: a.name, team_abbr: a.team_abbr, ppg: s.ppg, rpg: s.rpg, apg: s.apg, spg: s.spg, bpg: s.bpg, is_player: false });
+  }
+  const top = key => rows.slice().sort((a, b) => b[key] - a[key]).slice(0, 5).map(r => ({ name: r.name, team_abbr: r.team_abbr, val: r[key], is_player: r.is_player }));
+  return { points: top('ppg'), rebounds: top('rpg'), assists: top('apg'), steals: top('spg'), blocks: top('bpg') };
 }
 
 // Called once per league game (from simulateGame): heal everyone a tick, then
@@ -1299,6 +1552,44 @@ function advanceLeaguePlayers(playerId) {
     ins.run(playerId, order[i % order.length], r.name, r.position, r.age, r.overall, r.potential, weightedChoice({ steady: 50, prodigy: 15, late: 15, ageless: 10, fizzle: 10 }), aiSalary(r.overall));
   }
   advanceLeagueMarket(playerId);
+  advanceLeagueCoaching(playerId);
+}
+
+// Coach turnover + ownership shakeups: a handful of teams fire their coach each
+// offseason (especially underperformers), and a team occasionally changes hands.
+function advanceLeagueCoaching(playerId) {
+  const season = getLeagueState(playerId).current_season;
+  const moves = [];
+  const fired = shuffle(ALL_TEAM_IDS.slice()).slice(0, randInt(4, 8));
+  for (const tid of fired) {
+    const rec = db.prepare('SELECT wins, losses FROM team_records WHERE player_id=? AND team_id=? AND season_number=?').get(playerId, tid, season);
+    const underperforming = rec && (rec.wins + rec.losses) > 0 && rec.wins / (rec.wins + rec.losses) < 0.4;
+    moves.push(`🧑‍🏫 ${TEAMS[tid].name} fired their head coach ${underperforming ? 'after a disappointing season' : 'in a front-office shakeup'}.`);
+    // A new coach actually changes the system: nudge a few of the team's best
+    // players (some thrive, some regress).
+    const core = db.prepare('SELECT id FROM ai_players WHERE player_id=? AND team_id=? AND retired=0 ORDER BY overall DESC LIMIT 3').all(playerId, tid);
+    for (const pl of core) {
+      const nudge = randInt(-2, 2);
+      if (nudge !== 0) db.prepare('UPDATE ai_players SET overall=MAX(40,MIN(99,overall+?)) WHERE id=?').run(nudge, pl.id);
+    }
+  }
+  // If YOUR team fired its coach, your hand-picked game plan resets to the new system.
+  const pTeam = db.prepare('SELECT team_id FROM players WHERE id=?').get(playerId)?.team_id;
+  if (pTeam != null && fired.includes(pTeam)) {
+    db.prepare("UPDATE players SET tactics_defense='balanced', tactics_offense='balanced' WHERE id=?").run(playerId);
+    moves.push(`🧑‍🏫 Your team fired its head coach — your game plan resets to the new system.`);
+  }
+  if (Math.random() < 0.12) {
+    const tid = choice(ALL_TEAM_IDS);
+    moves.push(`💰 ${TEAMS[tid].name} was sold to a new ownership group.`);
+    // New ownership often means an infusion of resources → a small overall bump.
+    const core = db.prepare('SELECT id FROM ai_players WHERE player_id=? AND team_id=? AND retired=0 ORDER BY overall DESC LIMIT 3').all(playerId, tid);
+    for (const pl of core) db.prepare('UPDATE ai_players SET overall=MAX(40,MIN(99,overall+1)) WHERE id=?').run(pl.id);
+  }
+  for (const m of moves) {
+    db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?, 'league', ?)").run(playerId, season, m);
+  }
+  return moves;
 }
 
 // ------------------------------------------------------------
@@ -1306,13 +1597,16 @@ function advanceLeaguePlayers(playerId) {
 // ------------------------------------------------------------
 // Team chemistry is no longer a bare number: it's the average bond with the
 // rotation the player actually shares the floor with (pulled from the AI roster).
-function syncTeammates(playerId) {
+function syncTeammates(playerId, force = false) {
   const p = db.prepare('SELECT team_id FROM players WHERE id=?').get(playerId);
   if (!p) return;
   ensureLeaguePlayers(playerId);
   const season = getLeagueState(playerId).current_season;
   db.prepare('DELETE FROM teammates WHERE player_id=? AND season_number<?').run(playerId, season);
-  if (db.prepare('SELECT COUNT(*) c FROM teammates WHERE player_id=? AND season_number=?').get(playerId, season).c > 0) return;
+  // If forced (draft/trade changed the team), rebuild the current-season locker
+  // room too — otherwise the player keeps a stale, unrelated roster all season.
+  if (force) db.prepare('DELETE FROM teammates WHERE player_id=? AND season_number=?').run(playerId, season);
+  if (!force && db.prepare('SELECT COUNT(*) c FROM teammates WHERE player_id=? AND season_number=?').get(playerId, season).c > 0) return;
   const roster = db.prepare('SELECT name, position FROM ai_players WHERE player_id=? AND team_id=? AND retired=0 ORDER BY overall DESC LIMIT 6').all(playerId, p.team_id);
   const pool = roster.length ? roster : [{ name: 'Rookie Mate', position: 'F' }];
   const ins = db.prepare('INSERT INTO teammates (player_id,season_number,name,position,bond) VALUES (?,?,?,?,?)');
@@ -1371,17 +1665,43 @@ function getLockerRoomBonds(playerId) {
   return { avg, top };
 }
 
+// A locker-room action: spend a little money/time to bond with one teammate.
+// Limited to a few per season; success scales with leadership.
+const MAX_LOCKER_ACTIONS = 3;
+function lockerRoomAction(playerId, teammateId) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p) throw httpError(404, 'Player not found');
+  const season = getLeagueState(playerId).current_season;
+  if ((p.locker_actions_used || 0) >= MAX_LOCKER_ACTIONS) throw httpError(400, `You've used all ${MAX_LOCKER_ACTIONS} locker-room actions this season.`);
+  const tm = db.prepare('SELECT * FROM teammates WHERE id=? AND player_id=? AND season_number=?').get(teammateId, playerId, season);
+  if (!tm) throw httpError(404, 'Teammate not found.');
+  if ((p.wealth || 0) < 0.5) throw httpError(400, 'Not enough money for a team dinner ($0.5M).');
+  db.prepare('UPDATE players SET wealth=MAX(0,wealth-0.5), locker_actions_used=locker_actions_used+1 WHERE id=?').run(playerId);
+  const successChance = clamp(0.45 + (p.leadership || 40) / 110, 0.25, 0.9);
+  if (Math.random() < successChance) {
+    const gain = randInt(5, 10);
+    db.prepare('UPDATE teammates SET bond=MIN(100,bond+?) WHERE id=?').run(gain, teammateId);
+    resyncChemistry(playerId);
+    return { success: true, name: tm.name, bond_gain: gain, message: `You bonded with ${tm.name} (+${gain}).` };
+  }
+  const loss = randInt(1, 3);
+  db.prepare('UPDATE teammates SET bond=MAX(0,bond-?) WHERE id=?').run(loss, teammateId);
+  resyncChemistry(playerId);
+  return { success: false, name: tm.name, bond_loss: loss, message: `The dinner with ${tm.name} was awkward (-${loss}).` };
+}
+
 // Offseason player movement: free agency (stars change teams) and trades
 // (rebuilders send a win-now veteran to a contender for youth). Moves are logged
 // to career_progress as 'league' events so they show up in the League tab + timeline.
 function pickTeamByStrength(playerId, overall) {
+  // Weighted random: stronger teams more likely, but not guaranteed.
+  // Also favor teams that need the player's position.
   const opts = ALL_TEAM_IDS.map(tid => {
     const s = teamStrength(playerId, tid);
-    const appeal = s + randRange(-6, 6) + (overall - 70) * 0.3;
-    return { tid, appeal };
+    const appeal = s * randRange(0.8, 1.2) + (overall - 70) * 0.3;
+    return { tid, weight: Math.max(1, appeal) };
   });
-  opts.sort((a, b) => b.appeal - a.appeal);
-  return opts[0].tid;
+  return weightedChoice(Object.fromEntries(opts.map(o => [o.tid, o.weight])));
 }
 
 function advanceLeagueMarket(playerId) {
@@ -1441,7 +1761,7 @@ function maybeDevelop(playerId) {
   if (gp - (p.last_dev_game || 0) < 12) return null;
   db.prepare('UPDATE players SET last_dev_game=? WHERE id=?').run(gp, playerId);
   const arche = GROWTH_ARCHETYPES[p.growth] || GROWTH_ARCHETYPES.steady;
-  const devChance = (p.potential || 50) / 100.0 * (p.work_ethic || 50) / 100.0 * arche.dev;
+  const devChance = (p.potential || 50) / 100.0 * (p.work_ethic || 50) / 100.0 * arche.dev * (0.7 + (p.morale ?? 75) / 250);
   if (Math.random() >= devChance || Math.random() < arche.bust) return null;
 
   const focus = p.dev_focus && DEVELOPABLE_ATTRS.includes(p.dev_focus) ? p.dev_focus : null;
@@ -1471,10 +1791,18 @@ function maybeDevelop(playerId) {
 }
 
 function maybeCareerEvent(playerId) {
-  if (Math.random() >= 0.02) return null;
-  const state = getLeagueState(playerId);
+  const mode = getLeagueState(playerId).game_mode || 'classic';
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
-  const candidates = CAREER_EVENTS.filter(e => !e.min_experience || (p.experience || 0) >= e.min_experience);
+  const flags = new Set(JSON.parse(p.flags || '[]'));
+  let baseChance = mode === 'story' ? 0.10 : 0.05;
+  if (flags.has('public_wedding')) baseChance *= 1.4; // celebrity life draws more attention
+  if (Math.random() >= baseChance) return null;
+  const state = getLeagueState(playerId);
+  const candidates = CAREER_EVENTS.filter(e => {
+    if (e.min_experience && (p.experience || 0) < e.min_experience) return false;
+    if (e.max_experience && (p.experience || 0) > e.max_experience) return false;
+    return true;
+  });
   if (!candidates.length) return null;
   const ev = candidates.find(e => e.id === weightedChoice(Object.fromEntries(candidates.map(e => [e.id, e.weight || 1]))));
   if (!ev) return null;
@@ -1497,16 +1825,20 @@ function maybeCareerEvent(playerId) {
   parts.push("updated_at=datetime('now')");
   vals.push(playerId);
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
+  const lang = getLeagueState(playerId).lang || 'en';
   db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,'event',?)")
-    .run(playerId, state.current_season, ev.title + ' — ' + ev.text);
-  return { type: 'event', event: { id: ev.id, title: ev.title, text: ev.text, tone: ev.tone, changes } };
+    .run(playerId, state.current_season, pick(ev.title, 'en') + ' — ' + pick(ev.text, 'en'));
+  return { type: 'event', event: { id: ev.id, title: pick(ev.title, lang), text: pick(ev.text, lang), tone: ev.tone, changes } };
 }
 
 // All-Star selection: a mid-season milestone with a small fame/respect bump.
 function allStarQualifies(p) {
   const g = Math.max(1, p.s_games);
   const score = p.s_pts / g + p.s_reb / g * 0.7 + p.s_ast / g * 0.8 + p.s_stl / g * 1.5 + p.s_blk / g * 1.5;
-  return score > 22 && p.s_wins >= 20;
+  // Fan voting: a big fan base earns a spot even with slightly lower production —
+  // the way popular players get voted in regardless of the stat sheet.
+  const fanBoost = clamp((p.fan_base ?? 5) / 30, 0, 3.5);
+  return score > (22 - fanBoost) && p.s_wins >= 20;
 }
 
 function maybeAllStar(playerId) {
@@ -1522,7 +1854,229 @@ function maybeAllStar(playerId) {
   db.prepare('INSERT INTO awards (player_id,season_number,award_type,award_name) VALUES (?,?,?,?)')
     .run(playerId, state.current_season, 'season', 'All-Star');
   db.prepare('UPDATE players SET clout=MIN(100,clout+3), fan_base=MIN(100,fan_base+3) WHERE id=?').run(playerId);
-  return { all_star: true, ppg };
+  // Simulate the All-Star game itself — a fun exhibition line scaled by overall.
+  const overall = calculateOverallRating(p);
+  const asPts = clamp(randInt(10, 18) + Math.round(overall / 8), 12, 34);
+  const asReb = clamp(randInt(1, 4) + Math.round(overall / 40), 2, 9);
+  const asAst = clamp(randInt(1, 5) + Math.round(overall / 40), 2, 10);
+  return { all_star: true, ppg, as_game: { pts: asPts, reb: asReb, ast: asAst } };
+}
+
+// The trade deadline: front offices move players without asking. A struggling or
+// capped-out team may ship the player to a contender — the classic "you got
+// traded" gut-punch that adds career uncertainty.
+function maybePassiveTrade(playerId) {
+  const state = getLeagueState(playerId);
+  if (state.current_phase !== 'regular_season' || state.games_played_in_season !== 40) return null;
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p) return null;
+  // A no-trade clause blocks involuntary trades (the player can still request one).
+  const nt = db.prepare('SELECT id FROM contracts WHERE player_id=? AND no_trade=1 AND years>0 ORDER BY signed_at DESC, id DESC LIMIT 1').get(playerId);
+  if (nt) return null;
+  const games = (p.s_wins || 0) + (p.s_losses || 0);
+  const winPct = games > 0 ? (p.s_wins || 0) / games : 0.5;
+  const overall = calculateOverallRating(p);
+  const isBadTeam = winPct < 0.4;
+  const overCap = teamSalary(playerId, p.team_id) > TEAM_SALARY_CAP * 1.1;
+  if (!isBadTeam && !overCap) return null;
+  let chance = 0.06;
+  if (isBadTeam) chance += 0.12;
+  if (overCap) chance += 0.08;
+  chance -= (overall - 75) * 0.004; // stars are harder to dump
+  chance = clamp(chance, 0.02, 0.25);
+  if (Math.random() >= chance) return null;
+  const dest = pickTeamByStrength(playerId, overall);
+  if (dest === p.team_id) return null;
+  const season = state.current_season;
+  const rec = db.prepare('SELECT wins, losses FROM team_records WHERE player_id=? AND team_id=? AND season_number=?').get(playerId, dest, season);
+  db.prepare('UPDATE players SET team_id=?, s_wins=?, s_losses=?, chemistry=50, morale=MAX(40,morale-5) WHERE id=?').run(dest, rec?.wins || 0, rec?.losses || 0, playerId);
+  const contract = db.prepare('SELECT id FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(playerId);
+  if (contract) db.prepare('UPDATE contracts SET team_id=? WHERE id=?').run(dest, contract.id);
+  syncTeammates(playerId, true);
+  db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,'trade',?)")
+    .run(playerId, season, `Traded to ${TEAMS[dest].name} at the trade deadline.`);
+  return { passive_trade: true, from: TEAMS[p.team_id].name, to: TEAMS[dest].name, reason: isBadTeam ? 'the team was struggling' : 'a salary-cap crunch' };
+}
+
+// All-Star Weekend: at game 41 the player can enter the dunk contest or the
+// three-point contest for a fame/morale bump (with a little risk).
+function maybeAllStarWeekend(playerId) {
+  const state = getLeagueState(playerId);
+  if (state.games_played_in_season !== 41) return null;
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (p.pending_weekend) return null;
+  db.prepare('UPDATE players SET pending_weekend=1 WHERE id=?').run(playerId);
+  return { allstar_weekend: true };
+}
+
+// All-Star Weekend: NBA-style dunk and 3pt contests.
+// ─── Dunk Contest ───
+// 4 participants, first round 2 dunks each, top 2 advance to finals.
+// Each dunk scored 40-50 by 5 simulated judges.
+// Player picks dunk type + distance per dunk. AI opponents generated on the fly.
+const DUNK_TYPES = [
+  { id: 'windmill', label: { en: 'Windmill', zh: '大风车' }, icon: '🌪️', desc: { en: 'A clean one-handed windmill.', zh: '一记干净的大风车扣篮。' }, diff: 0 },
+  { id: 'tomahawk', label: { en: 'Tomahawk', zh: '战斧劈扣' }, icon: '🪓', desc: { en: 'An aggressive one-handed hammer.', zh: '一记凶狠的单臂劈扣。' }, diff: 0.5 },
+  { id: 'reverse', label: { en: 'Reverse', zh: '反身扣篮' }, icon: '🔄', desc: { en: 'Turn your back to the basket mid-air.', zh: '空中转身背对篮筐扣进。' }, diff: 0.5 },
+  { id: '360', label: { en: '360°', zh: '360度转身' }, icon: '🌀', desc: { en: 'A full rotation before slamming.', zh: '空中转体一圈再扣。' }, diff: 1.5 },
+  { id: 'between_legs', label: { en: 'Between the Legs', zh: '胯下换手' }, icon: '🦵', desc: { en: 'Switch hands under the leg.', zh: '空中胯下换手再扣。' }, diff: 2.0 },
+  { id: 'eastbay', label: { en: 'Eastbay', zh: '拉杆背扣' }, icon: '💫', desc: { en: 'Between the legs from behind the back.', zh: '背后换手胯下再扣——极致拉杆。' }, diff: 3.0 },
+  { id: 'cradle', label: { en: 'Cradle', zh: '摇篮扣' }, icon: '🍼', desc: { en: 'Cup the ball like a baby, then slam.', zh: '单手托球如摇篮，然后暴扣。' }, diff: 1.0 },
+  { id: 'two_hand_power', label: { en: 'Two-Hand Power', zh: '双手暴力扣' }, icon: '💪', desc: { en: 'Both hands, maximum force.', zh: '双手灌篮，力道拉满。' }, diff: 0.3 },
+  { id: 'poster', label: { en: 'Over Someone', zh: '隔人暴扣' }, icon: '🧍', desc: { en: 'Rise up and dunk over a defender.', zh: '越过防守者扣篮。' }, diff: 2.5 },
+  { id: '360_between', label: { en: '360° Between Legs', zh: '360度胯下' }, icon: '🌀🦵', desc: { en: '360 spin AND between the legs — the ultimate.', zh: '360度转身加胯下——终极动作。' }, diff: 4.0 },
+];
+
+const DUNK_DISTANCES = [
+  { id: 'close', label: { en: 'Close Range', zh: '近距离' }, penalty: 0, desc: { en: 'Standard approach.', zh: '标准起步。' } },
+  { id: 'ft_line', label: { en: 'Free Throw Line', zh: '罚球线起跳' }, penalty: 1.5, desc: { en: 'Take off from the free throw line.', zh: '从罚球线起跳——经典之作。' } },
+  { id: 'half_court', label: { en: 'Half Court', zh: '半场起跑' }, penalty: 3.0, desc: { en: 'Full speed from half court.', zh: '全场冲刺到篮下——极考验体能。' } },
+];
+
+// Eligibility: dunk needs vertical_jump>=55 or finishing>=50 or clout>=70.
+function dunkEligible(p) {
+  // Pure athleticism, or elite finishing compensates for moderate vert, or pure fame.
+  return (p.vertical_jump >= 75 || (p.finishing >= 80 && p.vertical_jump >= 60) || (p.clout || 0) >= 85);
+}
+
+// Score one dunk attempt with combo elements + 5-judge system.
+// `dunkIds` is an array of dunk type IDs selected by the player.
+// Returns { judges: [5 scores], total, success, combo_label }.
+function scoreDunk(playerAttrs, dunkIds, distPenalty, attempt) {
+  const energyDecay = (attempt - 1) * 0.2;
+  // Combined difficulty: max element diff + 0.5 per extra element + dist penalty.
+  const elements = dunkIds.map(id => DUNK_TYPES.find(d => d.id === id)).filter(Boolean);
+  const maxDiff = Math.max(...elements.map(e => e.diff), 0);
+  const comboDiff = maxDiff + (elements.length - 1) * 0.6 + distPenalty;
+  // Success probability: harder combos are more likely to fail.
+  const attrPower = ((playerAttrs.vertical_jump || 60) * 0.5 + (playerAttrs.finishing || 60) * 0.3 + (playerAttrs.strength || 60) * 0.2) / 100;
+  const successProb = clamp(attrPower * (1.4 - comboDiff * 0.12) - energyDecay * 0.02, 0.08, 0.95);
+  const success = Math.random() < successProb;
+  // 5 judges, each 8.0–10.0, then multiply by attempt count (attempt 1 = ×1, attempt 2 = ×1, attempt 3 = ×0.8).
+  const attemptMult = attempt >= 3 ? 0.8 : 1;
+  const judges = Array.from({length: 5}, () => {
+    if (!success) return round1(clamp(8.0 + gauss(0, 0.5), 6.0, 9.0) * attemptMult);
+    const base = 9.5 - comboDiff * 0.18 - energyDecay * 0.03 + gauss(0, 0.35);
+    return round1(clamp(base, 8.0, 10.0) * attemptMult);
+  });
+  const total = round1(judges.reduce((s, j) => s + j, 0));
+  const comboLabel = elements.map(e => pick(e.label, 'en')).join(' + ');
+  return { judges, total, success, combo_label: comboLabel, diff: round1(comboDiff) };
+}
+
+// Generate AI dunk contest participants (3 opponents with varied attributes).
+function generateDunkOpponents() {
+  const archetypes = [
+    { name: 'High-Flyer', vert: 88, fin: 70, str: 55, ovr: 82 },
+    { name: 'Power Dunker', vert: 72, fin: 80, str: 85, ovr: 78 },
+    { name: 'Rookie Showman', vert: 82, fin: 65, str: 60, ovr: 75 },
+  ];
+  return archetypes.map((a, i) => ({
+    id: 'ai_' + i, name: a.name, is_player: false,
+    overall: a.ovr, vertical_jump: a.vert, finishing: a.fin, strength: a.str,
+  }));
+}
+
+// AI picks a dunk: weighted random favoring difficulty matched to ability.
+function aiPickDunk(ai) {
+  const ability = (ai.vertical_jump + ai.finishing + ai.strength) / 3;
+  const weighted = DUNK_TYPES.map(d => ({ ...d, weight: Math.max(1, 10 - Math.abs(d.diff * 1.2 - (ability - 55) / 15)) }));
+  const totalW = weighted.reduce((s, d) => s + d.weight, 0);
+  let r = Math.random() * totalW;
+  for (const d of weighted) { r -= d.weight; if (r <= 0) return d; }
+  return weighted[0];
+}
+function aiPickDistance(ai) {
+  const r = Math.random();
+  if (r < 0.6) return DUNK_DISTANCES[0];
+  if (r < 0.85) return DUNK_DISTANCES[1];
+  return DUNK_DISTANCES[2];
+}
+
+// ─── 3-Point Contest ───
+// 8 participants, first round + finals (top 3 advance).
+// 5 racks × 5 balls + 2 logo shots = 27 balls, max 36 points.
+// Player chooses which rack is all-money-ball (5 × 2pt = 10pt max).
+const THREE_RACKS = [
+  { id: 'left_corner', label: { en: 'Left Corner', zh: '左底角' }, icon: '📐' },
+  { id: 'left_wing', label: { en: 'Left Wing', zh: '左侧翼' }, icon: '🎯' },
+  { id: 'top', label: { en: 'Top of Key', zh: '弧顶' }, icon: '🏹' },
+  { id: 'right_wing', label: { en: 'Right Wing', zh: '右侧翼' }, icon: '🎯' },
+  { id: 'right_corner', label: { en: 'Right Corner', zh: '右底角' }, icon: '📐' },
+];
+
+// Eligibility: 3pt needs catch_shoot_3pt>=50 or clout>=70.
+function threeEligible(p) {
+  // Elite shooting, or strong mid-range with decent catch-and-shoot, or pure fame.
+  return (p.catch_shoot_3pt >= 75 || (p.mid_range >= 80 && p.catch_shoot_3pt >= 60) || (p.clout || 0) >= 85);
+}
+
+// Simulate one rack (5 balls): 4 regular (1pt) + 1 money ball (2pt).
+// `makeProb` is per-ball probability. Returns array of {ball, made, points}.
+function simRack(makeProb, isMoneyRack) {
+  const balls = [];
+  for (let i = 0; i < 4; i++) { const made = Math.random() < makeProb; balls.push({ ball: 'regular', made, points: made ? 1 : 0 }); }
+  const moneyMade = Math.random() < makeProb;
+  if (isMoneyRack) {
+    // All-money-ball rack: 5 balls, each 2pt.
+    return Array.from({length: 5}, () => { const made = Math.random() < makeProb; return { ball: 'money', made, points: made ? 2 : 0 }; });
+  }
+  balls.push({ ball: 'money', made: moneyMade, points: moneyMade ? 2 : 0 });
+  return balls;
+}
+
+// Simulate full 3pt round for one player: 5 racks + 2 logo shots.
+// moneyRackIdx = which rack (0-4) is all-money-ball.
+function simThreeRound(tpAttr, moneyRackIdx) {
+  const makeProb = clamp(tpAttr / 200 + 0.12, 0.15, 0.58);
+  const racks = [];
+  for (let i = 0; i < 5; i++) {
+    racks.push({ rack: THREE_RACKS[i], balls: simRack(makeProb, i === moneyRackIdx) });
+  }
+  const logo1 = { made: Math.random() < (makeProb * 0.5), points: 0 };
+  if (logo1.made) logo1.points = 3;
+  const logo2 = { made: Math.random() < (makeProb * 0.5), points: 0 };
+  if (logo2.made) logo2.points = 3;
+  const total = racks.reduce((s, r) => s + r.balls.reduce((s2, b) => s2 + b.points, 0), 0) + logo1.points + logo2.points;
+  return { racks, logo: [logo1, logo2], total };
+}
+
+// Generate AI 3pt participants (7 opponents).
+function generateThreeOpponents() {
+  const archetypes = [
+    { name: 'Splash Brother', tp: 88, ovr: 85 }, { name: 'Sharpshooter', tp: 82, ovr: 80 },
+    { name: 'Catch-and-Shoot', tp: 78, ovr: 76 }, { name: 'Streaky Gunner', tp: 72, ovr: 74 },
+    { name: 'Spot-Up Sniper', tp: 85, ovr: 79 }, { name: 'Volume Shooter', tp: 68, ovr: 72 },
+    { name: 'Rookie Marksman', tp: 75, ovr: 70 },
+  ];
+  return archetypes.map((a, i) => ({
+    id: 'ai3_' + i, name: a.name, is_player: false,
+    catch_shoot_3pt: a.tp, overall: a.ovr, money_rack: Math.floor(Math.random() * 5),
+  }));
+}
+
+function resolveAllStarWeekend(playerId, choice) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p) throw httpError(404, 'Player not found');
+  if (!p.pending_weekend) throw httpError(400, 'No pending All-Star Weekend decision.');
+  db.prepare('UPDATE players SET pending_weekend=0 WHERE id=?').run(playerId);
+  return { choice, message: choice === 'skip' ? 'You sat out the weekend events.' : 'Contest in progress.' };
+}
+
+// Finalize a completed contest: apply clout/fan_base rewards based on placement.
+function finalizeContest(playerId, type, placement, totalScore) {
+  const isWinner = placement === 1;
+  const isFinalist = placement <= 2;
+  const clout = isWinner ? 8 : isFinalist ? 5 : placement <= 3 ? 3 : 1;
+  const fan = isWinner ? 6 : isFinalist ? 3 : placement <= 3 ? 2 : 0;
+  const morale = isWinner ? 4 : isFinalist ? 2 : 0;
+  const label = type === 'dunk' ? 'Dunk Contest' : 'Three-Point Contest';
+  db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+?), injury_risk=MIN(100,injury_risk+?) WHERE id=?')
+    .run(clout, fan, morale, type === 'dunk' ? 2 : 0, playerId);
+  db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)")
+    .run(playerId, getLeagueState(playerId).current_season, 'event',
+      `${label}: ${isWinner ? 'Won' : isFinalist ? 'Runner-up' : `#${placement}`} with ${totalScore} points.`);
+  return { placement, total_score: totalScore, clout, fan_base: fan, message: isWinner ? `You won the ${label}!` : `Finished #${placement} in the ${label}.` };
 }
 
 // ------------------------------------------------------------
@@ -1591,10 +2145,10 @@ function playoffOpponentTeam(standings, playerTeamId, playerSeed, round) {
 
 function resetSeasonCounters(playerId) {
   db.prepare(`UPDATE players SET
-    s_pts=0,s_reb=0,s_ast=0,s_stl=0,s_blk=0,s_tov=0,s_fga=0,s_fgm=0,s_3pa=0,s_3pm=0,s_fta=0,s_ftm=0,s_games=0,s_min=0,s_pf=0,s_wins=0,s_losses=0,
-    p_pts=0,p_reb=0,p_ast=0,p_stl=0,p_blk=0,p_tov=0,p_fga=0,p_fgm=0,p_3pa=0,p_3pm=0,p_fta=0,p_ftm=0,p_games=0,p_min=0,p_pf=0,p_wins=0,p_losses=0,
+    s_pts=0,s_reb=0,s_ast=0,s_stl=0,s_blk=0,s_tov=0,s_fga=0,s_fgm=0,s_3pa=0,s_3pm=0,s_fga_mid=0,s_fta=0,s_ftm=0,s_games=0,s_min=0,s_pf=0,s_wins=0,s_losses=0,
+    p_pts=0,p_reb=0,p_ast=0,p_stl=0,p_blk=0,p_tov=0,p_fga=0,p_fgm=0,p_3pa=0,p_3pm=0,p_fga_mid=0,p_fta=0,p_ftm=0,p_games=0,p_min=0,p_pf=0,p_wins=0,p_losses=0,
     hot_streak=0,cold_streak=0,injury_status=NULL,injury_games_remaining=0,injury_treatment=NULL,
-    fatigue=MAX(0,fatigue-45),injury_risk=0,mvp_votes=0,last_dev_game=0
+    fatigue=MAX(0,fatigue-45),injury_risk=0,mvp_votes=0,last_dev_game=0,locker_actions_used=0
     WHERE id=?`).run(playerId);
 }
 
@@ -1634,7 +2188,8 @@ function generateContractOffers(playerId) {
   const ppg = sum?.ppg || 0;
   // Market value from performance + overall + clout, capped by the player's max.
   const maxSal = maxSalaryFor(p.experience || 0);
-  const base = clamp(round1(Math.max(3, ppg * 1.15 + overall * 0.12 + (p.clout || 0) * 0.05)), 3, maxSal);
+  const fanMult = 1 + ((p.fan_base || 5) - 20) / 400; // market appeal: stars draw more money
+  const base = clamp(round1(Math.max(3, (ppg * 1.15 + overall * 0.12 + (p.clout || 0) * 0.05) * fanMult)), 3, maxSal);
   // The home team always gets to bid (Bird rights), plus four others.
   const others = shuffle(ALL_TEAM_IDS.filter(id => id !== p.team_id)).slice(0, 4);
   const teams = [p.team_id, ...others];
@@ -1642,19 +2197,22 @@ function generateContractOffers(playerId) {
   for (const tid of teams) {
     const t = TEAMS[tid];
     const isHome = tid === p.team_id;
+    const dynStr = teamStrength(playerId, tid);
+    const proj = teamProjection(playerId, tid);
     // Pricing: the home team (Bird rights) leads but doesn't always max out;
     // rebuilders overpay to lure stars; contenders offer less cash but a title shot.
+    // Uses live strength (not static OVR) so it matches proj_wins/title_pct.
     let annual;
-    if (isHome) annual = round1(base * randRange(0.95, 1.12));
-    else if (t.ovr >= 84) annual = round1(base * randRange(0.72, 0.92));
-    else if (t.ovr <= 68) annual = round1(base * randRange(1.05, 1.3));
+    if (isHome) annual = round1(base * randRange(0.95, 1.12) * (1 + ((p.morale ?? 75) - 75) / 500) * (1 + (teamChemistry(playerId) - 50) / 500)); // happy + gelled → the home team pays to keep you
+    else if (dynStr >= 74) annual = round1(base * randRange(0.72, 0.92));
+    else if (dynStr <= 58) annual = round1(base * randRange(1.05, 1.3));
     else annual = round1(base * randRange(0.85, 1.05));
     annual = clamp(annual, 3, maxSal);
-    const titleShot = !isHome && t.ovr >= 84;
+    const titleShot = !isHome && proj.title_pct > 0;
     const years = choice([2, 3, 4]);
     const ins = db.prepare('INSERT INTO contract_offers (player_id,season_number,team_id,years,annual_value,total_value,contract_type) VALUES (?,?,?,?,?,?,?)')
       .run(playerId, season, tid, years, annual, round1(annual * years), 'Free Agency');
-    offers.push({ id: Number(ins.lastInsertRowid), team: t.name, team_abbr: t.abbr, years, annual_value: annual, total_value: round1(annual * years), ovr: t.ovr, title_shot: titleShot });
+    offers.push({ id: Number(ins.lastInsertRowid), team: t.name, team_abbr: t.abbr, years, annual_value: annual, total_value: round1(annual * years), ovr: Math.round(dynStr), title_shot: titleShot, proj_wins: proj.proj_wins, title_pct: proj.title_pct });
   }
   return offers.sort((a, b) => b.annual_value - a.annual_value);
 }
@@ -1662,26 +2220,75 @@ function generateContractOffers(playerId) {
 function signContract(playerId, offerId) {
   const offer = db.prepare('SELECT * FROM contract_offers WHERE id=? AND player_id=? AND accepted=0').get(offerId, playerId);
   if (!offer) throw httpError(404, 'Offer not found or no longer available');
-  const t = TEAMS[offer.team_id];
-  const titleShot = t && t.ovr >= 84;
-  db.prepare('INSERT INTO contracts (player_id,season_number,team_id,years,total_value,annual_salary,contract_type) VALUES (?,?,?,?,?,?,?)')
-    .run(playerId, offer.season_number, offer.team_id, offer.years, offer.total_value, offer.annual_value, offer.contract_type);
+  const titleShot = teamProjection(playerId, offer.team_id).title_pct > 0;
+  const p = db.prepare('SELECT clout FROM players WHERE id=?').get(playerId);
+  // High-clout players can get a player option on the final year, and the very
+  // biggest stars can add a no-trade clause.
+  const hasOption = (p?.clout || 0) >= 55;
+  const hasNoTrade = (p?.clout || 0) >= 70;
+  db.prepare('INSERT INTO contracts (player_id,season_number,team_id,years,total_value,annual_salary,contract_type,player_option,no_trade) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(playerId, offer.season_number, offer.team_id, offer.years, offer.total_value, offer.annual_value, hasOption ? 'Player Option' : offer.contract_type, hasOption ? 1 : 0, hasNoTrade ? 1 : 0);
   db.prepare('UPDATE players SET team_id=?, clout=MAX(0,clout-2) WHERE id=?').run(offer.team_id, playerId);
+  syncTeammates(playerId, true);
   if (titleShot) {
     // Joining a contender is worth the money left on the table.
-    db.prepare('UPDATE players SET clout=MIN(100,clout+3), fan_base=MIN(100,fan_base+5) WHERE id=?').run(playerId);
+    db.prepare('UPDATE players SET clout=MIN(100,clout+5), fan_base=MIN(100,fan_base+8) WHERE id=?').run(playerId);
   }
+  // Values: taking a discount for a contender is a career/fame statement;
+  // cashing in on a max deal is a money move. The two branches diverge.
+  addValues(playerId, titleShot ? { career: 2, fame: 1 } : { money: 2 });
   db.prepare('UPDATE contract_offers SET accepted=1 WHERE player_id=?').run(playerId);
+  const perks = [hasOption ? 'a player option' : null, hasNoTrade ? 'a no-trade clause' : null].filter(Boolean).join(' and ');
   db.prepare('INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)')
-    .run(playerId, offer.season_number, 'event', `Signed a ${offer.years}-year, $${round1(offer.annual_value)}M/yr deal with ${TEAMS[offer.team_id].name}.`);
-  return { signed: true, team: TEAMS[offer.team_id].name, team_abbr: TEAMS[offer.team_id].abbr, annual_value: offer.annual_value, years: offer.years };
+    .run(playerId, offer.season_number, 'event', `Signed a ${offer.years}-year, $${round1(offer.annual_value)}M/yr deal with ${TEAMS[offer.team_id].name}${perks ? ` (${perks})` : ''}.`);
+  return { signed: true, team: TEAMS[offer.team_id].name, team_abbr: TEAMS[offer.team_id].abbr, annual_value: offer.annual_value, years: offer.years, player_option: hasOption, no_trade: hasNoTrade };
+}
+
+// Negotiate a contract offer: push for more money (or a player option), risking
+// the offer being pulled. Mirrors negotiateEndorsement.
+function negotiateContract(playerId, offerId) {
+  const offer = db.prepare('SELECT * FROM contract_offers WHERE id=? AND player_id=? AND accepted=0').get(offerId, playerId);
+  if (!offer) throw httpError(404, 'Offer not found or no longer available');
+  const p = db.prepare('SELECT clout FROM players WHERE id=?').get(playerId);
+  const leverage = clamp(0.3 + (p.clout || 0) / 110, 0.2, 0.85);
+  if (Math.random() < leverage) {
+    const bump = round1(offer.annual_value * randRange(0.08, 0.22));
+    const newAnnual = round1(offer.annual_value + bump);
+    const newYears = offer.years + (Math.random() < 0.35 ? 1 : 0);
+    db.prepare('UPDATE contract_offers SET annual_value=?, total_value=?, years=? WHERE id=?').run(newAnnual, round1(newAnnual * newYears), newYears, offerId);
+    return { success: true, team: TEAMS[offer.team_id].name, old_annual: offer.annual_value, new_annual: newAnnual, years: newYears, message: `${TEAMS[offer.team_id].name} raised their offer to $${newAnnual}M/yr.` };
+  }
+  db.prepare('DELETE FROM contract_offers WHERE id=?').run(offerId);
+  db.prepare('UPDATE players SET clout=MAX(0,clout-2) WHERE id=?').run(playerId);
+  return { success: false, team: TEAMS[offer.team_id].name, message: `${TEAMS[offer.team_id].name} pulled their offer — you pushed too hard.` };
+}
+
+// Resolve a player option: exercise (play the final year) or decline (free agency).
+function resolvePlayerOption(playerId, choice) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p) throw httpError(404, 'Player not found');
+  if (!p.pending_option) throw httpError(400, 'No pending player-option decision.');
+  const contract = db.prepare('SELECT * FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(playerId);
+  if (choice === 'exercise') {
+    db.prepare('UPDATE contracts SET years=1, player_option=0 WHERE id=?').run(contract.id);
+    db.prepare('UPDATE players SET pending_option=0 WHERE id=?').run(playerId);
+    return { exercised: true, message: 'You exercised your option — one more year at $' + round1(contract.annual_salary) + 'M.' };
+  }
+  if (choice === 'decline') {
+    db.prepare('UPDATE contracts SET years=0, player_option=0 WHERE id=?').run(contract.id);
+    const offers = generateContractOffers(playerId);
+    db.prepare('UPDATE players SET pending_option=0 WHERE id=?').run(playerId);
+    return { declined: true, offers, message: 'You declined your option — you are now a free agent.' };
+  }
+  throw httpError(400, "Invalid choice. Use 'exercise' or 'decline'.");
 }
 
 function requestBuyout(playerId) {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
   if (p.clout < 20) return { success: false, message: "You don't have enough leverage to force a buyout yet." };
-  const success = Math.random() < Math.min(0.7, p.clout / 140.0);
+  const chem = teamChemistry(playerId);
+  const success = Math.random() < Math.min(0.8, p.clout / 140.0 + Math.max(0, 50 - chem) / 150);
   if (success) {
     const contract = db.prepare('SELECT id FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(playerId);
     if (contract) db.prepare('UPDATE contracts SET years=0 WHERE id=?').run(contract.id);
@@ -1704,7 +2311,8 @@ function applyInjuryTreatment(playerId, option) {
 
   let games = p.injury_games_remaining, durability = p.durability, wealth = p.wealth, risk = p.injury_risk, msg = '';
   if (option === 'rest') {
-    msg = 'You chose to rest and fully recover on schedule.';
+    games = Math.max(1, Math.ceil(games * (1 - ((p.work_ethic ?? 50) - 50) / 300)));   // crazy rehab shortens recovery
+    msg = 'You chose to rest and recover — your relentless work ethic speeds it up.';
   } else if (option === 'surgery') {
     games = Math.max(1, Math.ceil(games * 0.6));   // faster recovery
     durability = clamp(durability + 2, 1, 99);      // long-term durability boost
@@ -1796,12 +2404,20 @@ function advanceYear(playerId) {
   const result = { salary_earned: 0, endorsement_income: 0, investments: [], endorsements_expired: [], free_agency: null };
 
   // Salary from the active contract, then tick it down toward free agency.
-  const contract = db.prepare('SELECT id, years, annual_salary FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(playerId);
+  const contract = db.prepare('SELECT id, years, annual_salary, player_option FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(playerId);
   if (contract) {
     if ((contract.years || 0) > 0) result.salary_earned = round2(contract.annual_salary || 0);
     const newYears = Math.max(0, (contract.years || 0) - 1);
     db.prepare('UPDATE contracts SET years=? WHERE id=?').run(newYears, contract.id);
-    if (newYears <= 0) result.free_agency = generateContractOffers(playerId);
+    if (newYears <= 0) {
+      if (contract.player_option) {
+        // The final year is a player option — decide before hitting free agency.
+        db.prepare('UPDATE players SET pending_option=1 WHERE id=?').run(playerId);
+        result.player_option = true;
+      } else {
+        result.free_agency = generateContractOffers(playerId);
+      }
+    }
   }
 
   // Endorsements: pay out annual_value, then decrement years_remaining.
@@ -1814,6 +2430,15 @@ function advanceYear(playerId) {
     if (yrs <= 0) result.endorsements_expired.push(e.brand_name);
   }
   result.endorsement_income = round2(endorsementIncome);
+
+  // Signature shoe: a permanent personal-brand line — pays annual royalties + fame.
+  const shoe = db.prepare('SELECT * FROM shoes WHERE player_id=?').get(playerId);
+  let shoeIncome = 0;
+  if (shoe) {
+    shoeIncome = shoe.annual_value || 0;
+    db.prepare('UPDATE players SET fan_base=MIN(100, fan_base + ?) WHERE id=?').run(randRange(0.5, 1.5), playerId);
+  }
+  result.shoe_income = round2(shoeIncome);
 
   // Investments: apply annual_return to current_value (was previously never updated).
   // Market drift — a macro regime that bends every investment's return. Rarely
@@ -1847,7 +2472,7 @@ function advanceYear(playerId) {
     result.investments.push({ name: inv.name, amount_invested: inv.amount_invested, current_value: newValue, asset_type: inv.asset_type, lock_season: inv.lock_season });
   }
 
-  const totalIncome = round2((result.salary_earned || 0) + (result.endorsement_income || 0));
+  const totalIncome = round2((result.salary_earned || 0) + (result.endorsement_income || 0) + (result.shoe_income || 0));
   if (totalIncome > 0) db.prepare('UPDATE players SET wealth=MAX(0, wealth + ?) WHERE id=?').run(totalIncome, playerId);
 
   // Lifestyle: burn money each year, buy a little fame.
@@ -1856,6 +2481,25 @@ function advanceYear(playerId) {
     db.prepare('UPDATE players SET wealth=MAX(0, wealth-?), fan_base=MIN(100, fan_base+?) WHERE id=?').run(lifestyle.cost, lifestyle.fame, playerId);
     result.lifestyle_cost = lifestyle.cost;
   }
+
+  // Advisor trust erodes a little each year (complacency, turnover, drift), so a
+  // rich player slowly slides toward the scam-risk zone unless they hire a new
+  // reputable advisor. After a scam it resets to 0 and the risk is gone for a while.
+  db.prepare('UPDATE players SET advisor_trust=MAX(0, advisor_trust - ?) WHERE id=?').run(randInt(1, 4), playerId);
+
+  // NPCs age alongside the player — update their meta.age each year.
+  const rels = db.prepare('SELECT id, meta FROM relationships WHERE player_id=?').all(playerId);
+  for (const r of rels) {
+    try {
+      const meta = JSON.parse(r.meta || '{}');
+      if (meta.age != null) { meta.age = (meta.age || 0) + 1; }
+      db.prepare('UPDATE relationships SET meta=? WHERE id=?').run(JSON.stringify(meta), r.id);
+    } catch {}
+  }
+
+  // Locker-room chemistry steadies (or sours) the mood heading into the offseason.
+  const chemMorale = Math.round((teamChemistry(playerId) - 50) / 10); // -5..+5
+  if (chemMorale !== 0) db.prepare('UPDATE players SET morale=MAX(10,MIN(100,morale+?)) WHERE id=?').run(chemMorale, playerId);
 
   // Advisor scam risk (sketchy advisor + big money).
   result.advisor_scam = maybeAdvisorScam(playerId);
@@ -1867,6 +2511,7 @@ function advanceYear(playerId) {
     const bits = [];
     if (result.salary_earned > 0) bits.push(`salary $${result.salary_earned.toFixed(2)}M`);
     if (result.endorsement_income > 0) bits.push(`endorsements $${result.endorsement_income.toFixed(2)}M`);
+    if (result.shoe_income > 0) bits.push(`shoe royalties $${result.shoe_income.toFixed(2)}M`);
     if (result.endorsements_expired.length) bits.push(`${result.endorsements_expired.join(', ')} deal expired`);
     if (result.lifestyle_cost > 0) bits.push(`lifestyle -$${result.lifestyle_cost.toFixed(2)}M`);
     if (result.advisor_scam) bits.push(`advisor scam -$${result.advisor_scam.loss.toFixed(2)}M`);
@@ -1897,6 +2542,9 @@ function maybeRetire(playerId) {
 }
 
 function retireNow(playerId) {
+  // A protege you mentored to a strong bond is a lasting legacy — his rise counts.
+  const protege = db.prepare("SELECT bond FROM relationships WHERE player_id=? AND type='protege' ORDER BY bond DESC LIMIT 1").get(playerId);
+  if (protege && protege.bond >= 60) db.prepare('UPDATE players SET goat_bonus=goat_bonus+20 WHERE id=?').run(playerId);
   const career = getCareerOverview(playerId);
   const goat = career.goat_score;
   // Two legacy tiers so a solid career still gets a satisfying ending.
@@ -1927,6 +2575,76 @@ function resolveRetirement(playerId, choice) {
   throw httpError(400, "Invalid choice. Use 'retire' or 'one_more_year'.");
 }
 
+// Second life — what a retired player does next. Paths are gated by the traits
+// they built over their career; each yields fame, wealth, and a legacy score.
+const SECOND_LIFE_PATHS = {
+  broadcaster: { label: 'Broadcaster', icon: '🎙️', desc: 'Call games from the booth.', req: { clout: 55 }, fame: [2, 8], wealth: [0.3, 1.5] },
+  coach:       { label: 'Head Coach', icon: '🧠', desc: 'Run a franchise from the bench.', req: { bbiq: 60, leadership: 55 }, fame: [1, 6], wealth: [0.5, 2.5] },
+  executive:   { label: 'Front Office', icon: '💼', desc: 'Build a contender as a GM.', req: { bbiq: 60, clout: 50 }, fame: [0, 4], wealth: [1, 5] },
+  owner:       { label: 'Team Owner', icon: '🏟️', desc: 'Buy your own franchise.', req: { wealth: 80 }, req_values: { money: 5 }, fame: [1, 5], wealth: [3, 10] },
+  empire:      { label: 'Business Empire', icon: '🏢', desc: 'Turn your money into an empire.', req: { wealth: 30 }, req_values: { money: 3 }, fame: [0, 3], wealth: [1, 8] },
+  foundation:  { label: 'Philanthropist', icon: '🤝', desc: 'Start a family foundation in your name.', req: { clout: 40 }, req_values: { family: 6 }, fame: [2, 8], wealth: [0, 0.5] },
+};
+
+function secondLifeQualifies(p, values, cfg) {
+  return Object.entries(cfg.req || {}).every(([k, v]) => (p[k] ?? 0) >= v)
+    && Object.entries(cfg.req_values || {}).every(([k, v]) => (values[k] ?? 0) >= v);
+}
+
+function getSecondLifeOptions(playerId) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p || !p.retired || p.second_life) return [];
+  const values = JSON.parse(p.life_values || '{}');
+  return Object.entries(SECOND_LIFE_PATHS)
+    .filter(([, cfg]) => secondLifeQualifies(p, values, cfg))
+    .map(([id, cfg]) => ({ id, label: cfg.label, icon: cfg.icon, desc: cfg.desc }));
+}
+
+function chooseSecondLife(playerId, path) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p || !p.retired) throw httpError(400, 'Not retired yet.');
+  if (p.second_life) throw httpError(400, 'Already chose a second life.');
+  const cfg = SECOND_LIFE_PATHS[path];
+  if (!cfg) throw httpError(400, 'Unknown path.');
+  const values = JSON.parse(p.life_values || '{}');
+  if (!secondLifeQualifies(p, values, cfg)) throw httpError(400, "You don't qualify for this path.");
+  const fameGain = randInt(cfg.fame[0], cfg.fame[1]);
+  const wealthGain = round2(randRange(cfg.wealth[0], cfg.wealth[1]));
+  const career = getCareerOverview(playerId);
+  let legacyScore = round1(Math.min(100, career.goat_score * 0.6 + fameGain * 1.5 + wealthGain * 0.8));
+  // Financial ending: your money decisions echo into retirement. A broke retiree
+  // limps away with a stain on their legacy; a wealthy one compounds it.
+  let financialEnding = null;
+  const w = p.wealth ?? 0;
+  if (w < 2) {
+    legacyScore = round1(Math.max(0, legacyScore - 15));
+    financialEnding = 'You retired nearly broke. The money — all those millions — slipped through your fingers like water. Within two years, you were selling memorabilia to cover the mortgage. It\'s the story nobody wants to tell, but 60% of NBA players live it.';
+  } else if (w < 10) {
+    legacyScore = round1(Math.max(0, legacyScore - 5));
+    financialEnding = 'You retired with modest savings. Not broke, but not secure either. The lifestyle took more than it should have. You\'d better make this second career count.';
+  } else if (w >= 50) {
+    legacyScore = round1(Math.min(100, legacyScore + 5));
+    financialEnding = 'You retired wealthy. Smart investments, disciplined spending, good advisors — your money kept working after you stopped. The fortune will outlast you.';
+  }
+  db.prepare('UPDATE players SET second_life=?, legacy_score=?, fan_base=MIN(100,fan_base+?), wealth=wealth+? WHERE id=?').run(path, legacyScore, fameGain, wealthGain, playerId);
+  db.prepare('INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)')
+    .run(playerId, getLeagueState(playerId).current_season, 'event', `Began a second life as a ${cfg.label} (${cfg.icon}).`);
+  return { path, label: cfg.label, icon: cfg.icon, fame_gain: fameGain, wealth_gain: wealthGain, legacy_score: legacyScore, financial_ending: financialEnding };
+}
+
+// Advance the second life one year: fame/wealth trickle in and legacy compounds.
+function advanceSecondLife(playerId) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p || !p.retired || !p.second_life) throw httpError(400, 'No active second life.');
+  const cfg = SECOND_LIFE_PATHS[p.second_life];
+  if (!cfg) throw httpError(400, 'Unknown second life.');
+  const fame = randInt(cfg.fame[0], cfg.fame[1]);
+  const wealth = round2(randRange(cfg.wealth[0], cfg.wealth[1]));
+  const legacy = round1(Math.min(100, (p.legacy_score || 0) + fame * 0.3 + wealth * 0.2));
+  db.prepare('UPDATE players SET second_life_years=second_life_years+1, legacy_score=?, fan_base=MIN(100,fan_base+?), wealth=wealth+? WHERE id=?').run(legacy, fame, wealth, playerId);
+  return { year: (p.second_life_years || 0) + 1, fame, wealth, legacy_score: legacy };
+}
+
 function endSeasonToOffseason(playerId, playoffResult) {
   const season = getLeagueState(playerId).current_season;
   recordPlayoffStats(playerId, season);
@@ -1935,9 +2653,10 @@ function endSeasonToOffseason(playerId, playoffResult) {
     const row = db.prepare('SELECT awards FROM season_summaries WHERE player_id=? AND season_number=?').get(playerId, season);
     let awards = [];
     try { awards = JSON.parse(row?.awards || '[]'); } catch {}
-    if (!awards.includes('NBA Champion')) awards.push('NBA Champion');
+    for (const a of ['NBA Champion', 'Finals MVP']) if (!awards.includes(a)) awards.push(a);
     db.prepare('UPDATE season_summaries SET awards=? WHERE player_id=? AND season_number=?').run(JSON.stringify(awards), playerId, season);
     db.prepare("INSERT INTO awards (player_id,season_number,award_type,award_name) VALUES (?,?,'season','NBA Champion')").run(playerId, season);
+    db.prepare("INSERT INTO awards (player_id,season_number,award_type,award_name) VALUES (?,?,'season','Finals MVP')").run(playerId, season);
   }
   resetSeasonCounters(playerId);
   db.prepare('UPDATE players SET experience=experience+1 WHERE id=?').run(playerId);
@@ -1945,7 +2664,97 @@ function endSeasonToOffseason(playerId, playoffResult) {
   db.prepare("UPDATE league_state SET current_phase='offseason', games_played_in_season=0, playoff_round=0, series_wins=0, series_losses=0, playoff_opponent=0 WHERE player_id=?").run(playerId);
   const ageChanges = applyAging(playerId);
   const retirement = maybeRetire(playerId);
+  checkMilestones(playerId);
+  // International tournament year — occasional (a big event roughly every 4 years).
+  const intlTournament = Math.random() < 0.25 ? (Math.random() < 0.5 ? 'olympics' : 'fiba') : null;
+  db.prepare('UPDATE league_state SET intl_tournament=? WHERE player_id=?').run(intlTournament, playerId);
   return { playoff_result: playoffResult, age_changes: ageChanges, year_settlement: yearSettlement, retirement };
+}
+
+// Career milestones — logged once each as the player crosses scoring thresholds.
+function checkMilestones(playerId) {
+  const totals = db.prepare('SELECT COALESCE(SUM(pts),0) pts FROM game_logs WHERE player_id=?').get(playerId).pts;
+  const season = getLeagueState(playerId).current_season;
+  const seen = new Set(db.prepare('SELECT milestone FROM career_progress WHERE player_id=? AND milestone IS NOT NULL').all(playerId).map(r => r.milestone));
+  for (const [m, goatBonus] of [[5000, 0], [10000, 5], [15000, 0], [20000, 10], [25000, 0], [30000, 15]]) {
+    const key = `${m}_points`;
+    if (totals >= m && !seen.has(key)) {
+      db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description,milestone) VALUES (?,?,'milestone',?,?)")
+        .run(playerId, season, `Reached ${m.toLocaleString()} career points.`, key);
+      if (goatBonus > 0) db.prepare('UPDATE players SET goat_bonus=goat_bonus+? WHERE id=?').run(goatBonus, playerId);
+    }
+  }
+}
+
+// ------------------------------------------------------------
+// All-time records — fictional "legend" benchmarks. Breaking one is a
+// career-defining moment: logged as a 'record' event and highlighted in the
+// Career tab alongside your own career highs.
+// ------------------------------------------------------------
+const LEGEND_RECORDS = {
+  single_game: [
+    { key: 'pts', label: 'Points in a game', holder: 'Wilt Chamberlain', value: 100, stat: 'pts' },
+    { key: 'reb', label: 'Rebounds in a game', holder: 'Wilt Chamberlain', value: 55, stat: 'reb' },
+    { key: 'ast', label: 'Assists in a game', holder: 'Scott Skiles', value: 30, stat: 'ast' },
+    { key: 'stl', label: 'Steals in a game', holder: 'Larry Kenon', value: 11, stat: 'stl' },
+    { key: 'blk', label: 'Blocks in a game', holder: 'Elmore Smith', value: 17, stat: 'blk' },
+    { key: 'tpm', label: 'Threes in a game', holder: 'Klay Thompson', value: 14, stat: 'tpm' },
+  ],
+  season: [
+    { key: 'ppg', label: 'Points per game', holder: 'Wilt Chamberlain', value: 50.4, stat: 'ppg' },
+    { key: 'rpg', label: 'Rebounds per game', holder: 'Wilt Chamberlain', value: 27.2, stat: 'rpg' },
+    { key: 'apg', label: 'Assists per game', holder: 'John Stockton', value: 14.5, stat: 'apg' },
+    { key: 'spg', label: 'Steals per game', holder: 'Alvin Robertson', value: 3.7, stat: 'spg' },
+    { key: 'bpg', label: 'Blocks per game', holder: 'Mark Eaton', value: 5.6, stat: 'bpg' },
+  ],
+};
+
+// Franchise single-game scoring records — a "reachable" middle tier between a
+// personal best and the untouchable legend records. Each team has a fictional
+// all-time scoring mark; breaking it is a one-time moment (milestone-deduped).
+const FRANCHISE_RECORDS = {
+  1: 58, 2: 62, 3: 55, 4: 57, 5: 60, 6: 66, 7: 60, 8: 57, 9: 61, 10: 64,
+  11: 62, 12: 55, 13: 58, 14: 60, 15: 54, 16: 63, 17: 59, 18: 61, 19: 57, 20: 62,
+  21: 60, 22: 58, 23: 64, 24: 59, 25: 63, 26: 57, 27: 61, 28: 60, 29: 62, 30: 58,
+};
+
+// A single-game box line checked against the single-game records.
+function checkGameRecords(box) {
+  return LEGEND_RECORDS.single_game
+    .filter(r => (box[r.stat] || 0) > r.value)
+    .map(r => ({ ...r, category: 'single_game', achieved: box[r.stat] }));
+}
+
+// Season averages checked against the season records at finalize time.
+function checkSeasonRecords(stats) {
+  return LEGEND_RECORDS.season
+    .filter(r => (stats[r.stat] || 0) > r.value)
+    .map(r => ({ ...r, category: 'season', achieved: stats[r.stat] }));
+}
+
+// Career highs vs the legends — what the Career tab renders.
+function careerRecords(playerId) {
+  const g = db.prepare('SELECT MAX(pts) pts, MAX(reb) reb, MAX(ast) ast, MAX(stl) stl, MAX(blk) blk, MAX(tpm) tpm FROM game_logs WHERE player_id=?').get(playerId);
+  const s = db.prepare('SELECT MAX(ppg) ppg, MAX(rpg) rpg, MAX(apg) apg, MAX(spg) spg, MAX(bpg) bpg FROM season_summaries WHERE player_id=?').get(playerId);
+  const best = {
+    single_game: { pts: g?.pts || 0, reb: g?.reb || 0, ast: g?.ast || 0, stl: g?.stl || 0, blk: g?.blk || 0, tpm: g?.tpm || 0 },
+    season: { ppg: s?.ppg || 0, rpg: s?.rpg || 0, apg: s?.apg || 0, spg: s?.spg || 0, bpg: s?.bpg || 0 },
+  };
+  const held = [];
+  for (const r of LEGEND_RECORDS.single_game) if (best.single_game[r.stat] > r.value) held.push({ ...r, category: 'single_game', achieved: best.single_game[r.stat] });
+  for (const r of LEGEND_RECORDS.season) if (best.season[r.stat] > r.value) held.push({ ...r, category: 'season', achieved: best.season[r.stat] });
+  return { legends: LEGEND_RECORDS, best, held };
+}
+
+function logRecordBroken(playerId, season, record) {
+  db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description,milestone) VALUES (?,?,?,?,?)")
+    .run(playerId, season, 'record', `${record.label} — new all-time record: ${record.achieved} (was ${record.holder}'s ${record.value})`, `record_${record.category}_${record.key}`);
+  // Breaking an all-time record is a career-defining moment — real rewards.
+  // goat_bonus is in the SAME raw units as the GOAT formula (÷6.5 at display),
+  // so a single-game record (~10) is about half an MVP (20), not 2/3 of one.
+  const isGame = record.category === 'single_game';
+  db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), goat_bonus=goat_bonus+? WHERE id=?')
+    .run(isGame ? 5 : 4, isGame ? 5 : 0, isGame ? 10 : 15, playerId);
 }
 
 function finalizeSeason(playerId) {
@@ -1970,15 +2779,15 @@ function finalizeSeason(playerId) {
 
   const awards = [];
   const star = ppg + rpg * 0.8 + apg * 0.8 + spg * 1.5 + bpg * 1.5;
-  // Media-driven MVP momentum (mvp_votes) now actually moves the needle on the
-  // statistical threshold, instead of being written but never read.
-  const mvpBoost = (p.mvp_votes || 0) * 0.15;
   // Season-long awards require actually being on the floor for most of the year:
   // a part-time player can't accumulate the counting stats that win real honors.
   const AWARD_MIN_GAMES = 58; // ~70% of 82
   const playedEnough = g >= AWARD_MIN_GAMES;
 
-  if (playedEnough && star + mvpBoost > 40 && p.s_wins > 45) awards.push('MVP');
+  // MVP: be the league's best — clear the top AI star's score (same formula as
+  // the MVP Race). A weak season never wins regardless of the AI field.
+  const playerWinPct = (p.s_wins + p.s_losses) > 0 ? p.s_wins / (p.s_wins + p.s_losses) : 0.5;
+  if (playedEnough && star > 25 && mvpScoreFrom(star, playerWinPct) > topAiMvpScore(playerId)) awards.push('MVP');
   if (playedEnough && star > 34) awards.push('All-NBA First Team');
   else if (playedEnough && star > 28) awards.push('All-NBA Second Team');
   else if (playedEnough && star > 22) awards.push('All-NBA Third Team');
@@ -2008,9 +2817,12 @@ function finalizeSeason(playerId) {
   db.prepare(`INSERT INTO season_summaries (${scols.join(',')}) VALUES (${scols.map(() => '?').join(',')})`).run(...svals);
   for (const a of awards) db.prepare("INSERT INTO awards (player_id,season_number,award_type,award_name) VALUES (?,?,'season',?)").run(playerId, state.current_season, a);
 
+  const recordsBroken = checkSeasonRecords({ ppg, rpg, apg, spg, bpg });
+  for (const r of recordsBroken) logRecordBroken(playerId, state.current_season, r);
+
   const base = { season: state.current_season, stats: { ppg, rpg, apg, spg, bpg, topg, fg_pct: fgPct, tp_pct: tpPct, ft_pct: ftPct, mpg },
                  advanced: { per, ts_pct: tsPct, usg_pct: usgPct, ws, bpm, vorp },
-                 team_record: `${p.s_wins}-${p.s_losses}`, awards };
+                 team_record: `${p.s_wins}-${p.s_losses}`, awards, records_broken: recordsBroken };
 
   // Qualify for the playoffs (~.500 or better), then seed the bracket.
   if (p.s_wins >= 42) {
@@ -2028,7 +2840,7 @@ function finalizeSeason(playerId) {
   return { ...base, qualified: false, playoff_result: 'Missed Playoffs', age_changes: end.age_changes, year_settlement: end.year_settlement, retirement: end.retirement };
 }
 
-function simulatePlayoffGame(playerId) {
+function simulatePlayoffGame(playerId, halftimeMods = null) {
   const state = getLeagueState(playerId);
   if (state.current_phase !== 'playoffs') throw httpError(400, 'No active playoff series.');
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
@@ -2038,7 +2850,7 @@ function simulatePlayoffGame(playerId) {
   const higherIsHome = [1, 2, 5, 7].includes(gameInSeries);
   const playerIsHigher = (state.player_seed || 9) < (state.opponent_seed || 9);
   const isHome = higherIsHome ? playerIsHigher : !playerIsHigher;
-  const game = simulateGame(playerId, oppId, true, isHome);
+  const game = simulateGame(playerId, oppId, true, isHome, halftimeMods);
 
   let sw = state.series_wins, sl = state.series_losses;
   if (game.result === 'W') sw++; else sl++;
@@ -2135,39 +2947,56 @@ const TRAINING_PROGRAMS = {
   'Mental Toughness': { desc: 'Pressure simulation, meditation, late-game scenario work.', primary: ['clutch_factor', 'composure', 'bbiq'], secondary: ['leadership', 'mid_range'], intensity: 0.48, inj_risk: 0 },
 };
 
-function applyTraining(playerId, programName) {
-  if (!TRAINING_PROGRAMS[programName]) throw httpError(400, `Unknown program: ${programName}`);
-  const prog = TRAINING_PROGRAMS[programName];
+function applyTraining(playerId, programNames) {
+  if (!Array.isArray(programNames)) programNames = [programNames];
+  programNames = programNames.filter(Boolean);
+  if (programNames.length < 1 || programNames.length > 3) throw httpError(400, 'Choose 1 to 3 training programs.');
+  if (new Set(programNames).size !== programNames.length) throw httpError(400, 'Choose distinct programs (no duplicates).');
+  const progs = programNames.map(name => {
+    const prog = TRAINING_PROGRAMS[name];
+    if (!prog) throw httpError(400, `Unknown program: ${name}`);
+    return prog;
+  });
   const state = getLeagueState(playerId);
   if (state.current_phase !== 'offseason') throw httpError(400, 'Training is only available during the offseason.');
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
-  if (p.trained_season === state.current_season) throw httpError(400, "You've already trained this offseason. One program per offseason.");
+  if (p.trained_season === state.current_season) throw httpError(400, "You've already trained this offseason. One plan per offseason.");
 
   let tmult;
   if (p.age < 22) tmult = 1.35; else if (p.age < 26) tmult = 1.12; else if (p.age < 30) tmult = 0.88; else if (p.age < 33) tmult = 0.60; else tmult = 0.30;
   const wmult = 0.65 + (p.work_ethic / 100.0) * 0.7;
   const uncertainty = randRange(0.7, 1.3);
-  const results = { program: programName, gains: {}, injuries: [], fatigue_cleared: 0 };
+  const results = { programs: programNames, gains: {}, injuries: [], fatigue_cleared: 0 };
 
-  // Offseason training is the biggest single development lever — base gains are
-  // deliberately higher than mid-season auto-development.
-  for (const attr of prog.primary) {
-    const cur = p[attr] ?? 50;
-    const baseGain = (attr === 'stamina' || attr === 'durability') ? 4 : 3;
-    let gain = Math.max(0, Math.round(baseGain * tmult * wmult * prog.intensity * uncertainty));
+  // Diminishing returns: one offseason can't fully develop three skills — the
+  // first program is primary, each later program spreads your effort thinner.
+  const SLOT_MULT = [1.0, 0.72, 0.48];
+
+  // Track the running rating per attribute so overlapping programs stack
+  // correctly (and the high-rating soft-cap applies to the accumulated value).
+  const running = {};
+  const applyAttr = (attr, baseGain, intensity) => {
+    const cur = running[attr] !== undefined ? running[attr] : (p[attr] ?? 50);
+    let gain = Math.max(0, Math.round(baseGain * tmult * wmult * intensity * uncertainty));
     if (cur > 80) gain = Math.max(0, gain - 1);
     if (cur > 90) gain = Math.max(0, gain - 2);
-    results.gains[attr] = { before: cur, after: clamp(cur + gain, 10, 99), gain };
-  }
-  for (const attr of prog.secondary) {
-    const cur = p[attr] ?? 50;
-    let gain = Math.max(0, Math.round(2.5 * tmult * wmult * prog.intensity * uncertainty));
-    if (cur > 85) gain = Math.max(0, gain - 1);
-    results.gains[attr] = { before: cur, after: clamp(cur + gain, 10, 99), gain };
-  }
+    const after = clamp(cur + gain, 10, 99);
+    running[attr] = after;
+    const before = p[attr] ?? 50;
+    results.gains[attr] = { before, after, gain: after - before };
+  };
 
-  const injChance = prog.inj_risk * (1.2 - p.durability / 100.0) / 100.0;
+  progs.forEach((prog, i) => {
+    const slotMult = SLOT_MULT[i];
+    for (const attr of prog.primary) applyAttr(attr, (attr === 'stamina' || attr === 'durability') ? 4 : 3, prog.intensity * slotMult);
+    for (const attr of prog.secondary) applyAttr(attr, 2.5, prog.intensity * slotMult);
+  });
+
+  // Overtraining: stacking programs raises injury risk faster than linear.
+  const totalInj = progs.reduce((s, x) => s + x.inj_risk, 0);
+  const overtraining = 1 + (progs.length - 1) * 0.5; // 1.0 / 1.5 / 2.0
+  const injChance = totalInj * overtraining * (1.2 - p.durability / 100.0) / 100.0;
   const injuryOccurred = Math.random() < injChance;
   if (injuryOccurred) {
     const itype = choice(['Minor training strain', 'Moderate muscle pull', 'Stress reaction']);
@@ -2256,6 +3085,105 @@ function negotiateEndorsement(playerId, offerId) {
   return { success: false, brand: offer.brand_name, message: `${offer.brand_name} pulled their offer — you pushed too hard.` };
 }
 
+// ------------------------------------------------------------
+// Commercial tours + signature shoe — the "personal brand" line,
+// separate from endorsements.
+// ------------------------------------------------------------
+// Offseason commercial tours: spend your offseason growing a global brand instead
+// of training. Mutually exclusive with training (same offseason slot).
+const TOURS = {
+  china: { label: 'China Tour', icon: '🇨🇳', desc: 'Camps and appearances across China. Your shoes sell out in Shanghai.', fan: [8, 15], clout: [4, 8], wealth: [2, 5], values: { fame: 2 } },
+  europe: { label: 'Europe Tour', icon: '🇪🇺', desc: 'Clinics across Europe — growing the game and your name.', fan: [6, 12], clout: [3, 6], wealth: [3, 6], values: { fame: 1, money: 1 } },
+  africa: { label: 'Basketball Without Borders', icon: '🌍', desc: 'Give back through NBA Africa — less money, a lasting legacy.', fan: [4, 8], clout: [5, 10], wealth: [0, 1], values: { family: 2, fame: 1 } },
+};
+
+function takeTour(playerId, destination) {
+  const tour = TOURS[destination];
+  if (!tour) throw httpError(400, `Unknown tour. Options: ${Object.keys(TOURS).join(', ')}`);
+  const state = getLeagueState(playerId);
+  if (state.current_phase !== 'offseason') throw httpError(400, 'Tours are only available during the offseason.');
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p) throw httpError(404, 'Player not found');
+  if (p.trained_season === state.current_season) throw httpError(400, "You've already used your offseason (training or a tour). One or the other.");
+  const fan = randInt(tour.fan[0], tour.fan[1]);
+  const clout = randInt(tour.clout[0], tour.clout[1]);
+  const wealth = randInt(tour.wealth[0], tour.wealth[1]);
+  db.prepare("UPDATE players SET fan_base=MIN(100,fan_base+?), clout=MIN(100,clout+?), wealth=MAX(0,wealth+?), trained_season=?, updated_at=datetime('now') WHERE id=?")
+    .run(fan, clout, wealth, state.current_season, playerId);
+  addValues(playerId, tour.values || {});
+  // A signature shoe sells more on tour — the brand grows with your reach.
+  const shoe = getShoe(playerId);
+  if (shoe) {
+    let boost = round1(shoe.annual_value * randRange(0.05, 0.15));
+    if (destination === 'china' && ['Li-Ning', 'Anta'].includes(shoe.brand)) boost = round1(boost * 1.5); // China loves its own brands
+    db.prepare('UPDATE shoes SET annual_value=annual_value+? WHERE id=?').run(boost, shoe.id);
+  }
+  const message = `${tour.label} — +${fan} fan base, +${clout} clout${wealth > 0 ? `, +$${wealth}M` : ''}.`;
+  db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)")
+    .run(playerId, state.current_season, 'event', `${message} ${tour.desc}`);
+  return { tour: tour.label, icon: tour.icon, fan_base: fan, clout, wealth, message };
+}
+
+// International play — the occasional offseason tournament year (FIBA World Cup
+// or Olympics). Representing your country costs your training slot but pays in
+// global fan base and national clout, with a medal (or a group exit).
+const INTL_TOURNAMENTS = {
+  fiba: { label: 'FIBA World Cup', icon: '🏀' },
+  olympics: { label: 'Olympics', icon: '🥇' },
+};
+
+function playIntlTournament(playerId) {
+  const state = getLeagueState(playerId);
+  if (state.current_phase !== 'offseason') throw httpError(400, 'International play is only available during the offseason.');
+  const tournament = state.intl_tournament;
+  if (!tournament || !INTL_TOURNAMENTS[tournament]) throw httpError(400, 'No international tournament this year.');
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p) throw httpError(404, 'Player not found');
+  if (p.trained_season === state.current_season) throw httpError(400, "You've already used your offseason (training, tour, or international play).");
+  // Medal roll: gold is rare, a group exit is common.
+  const roll = Math.random();
+  let medal = 'group', fanGain = 2, cloutGain = 1;
+  if (roll < 0.12) { medal = 'gold'; fanGain = randInt(10, 15); cloutGain = randInt(6, 10); }
+  else if (roll < 0.32) { medal = 'silver'; fanGain = randInt(6, 9); cloutGain = randInt(4, 7); }
+  else if (roll < 0.55) { medal = 'bronze'; fanGain = randInt(4, 6); cloutGain = randInt(2, 5); }
+  db.prepare("UPDATE players SET fan_base=MIN(100,fan_base+?), clout=MIN(100,clout+?), trained_season=?, updated_at=datetime('now') WHERE id=?")
+    .run(fanGain, cloutGain, state.current_season, playerId);
+  addValues(playerId, { fame: medal === 'gold' ? 3 : medal === 'silver' ? 2 : medal === 'bronze' ? 1 : 0 });
+  const cfg = INTL_TOURNAMENTS[tournament];
+  const nat = p.nationality || 'your country';
+  const medalLabel = medal === 'gold' ? '🥇 Gold' : medal === 'silver' ? '🥈 Silver' : medal === 'bronze' ? '🥉 Bronze' : 'Group stage exit';
+  db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)")
+    .run(playerId, state.current_season, 'event', `${cfg.label}: ${medalLabel} for ${nat} — +${fanGain} global fan base, +${cloutGain} clout.`);
+  db.prepare('UPDATE league_state SET intl_tournament=NULL WHERE player_id=?').run(playerId);
+  return { tournament: cfg.label, nationality: nat, medal, medal_label: medalLabel, fan_base: fanGain, clout: cloutGain };
+}
+
+const SHOE_BRANDS = ['Nike', 'Adidas', 'Jordan Brand', 'Puma', 'Under Armour', 'Anta', 'Li-Ning', 'New Balance'];
+
+function shoeAnnualValue(p) {
+  return round1(clamp((p.clout || 0) * 0.08 + (p.fan_base || 0) * 0.06, 2, 18));
+}
+
+function getShoe(playerId) {
+  return db.prepare('SELECT * FROM shoes WHERE player_id=?').get(playerId) || null;
+}
+
+function signShoe(playerId, brand, name, colorway) {
+  if (!SHOE_BRANDS.includes(brand)) throw httpError(400, `Unknown brand. Options: ${SHOE_BRANDS.join(', ')}`);
+  if (!name || !name.trim()) throw httpError(400, 'Give your shoe a name.');
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p) throw httpError(404, 'Player not found');
+  if ((p.clout || 0) < 60) throw httpError(400, 'You need 60+ clout to land a signature shoe.');
+  if (getShoe(playerId)) throw httpError(400, 'You already have a signature shoe.');
+  const annual = shoeAnnualValue(p);
+  const season = getLeagueState(playerId).current_season;
+  db.prepare('INSERT INTO shoes (player_id,brand,name,colorway,annual_value,signed_season) VALUES (?,?,?,?,?,?)')
+    .run(playerId, brand, name.trim(), colorway || 'home', annual, season);
+  db.prepare('INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)')
+    .run(playerId, season, 'event', `Signed a signature shoe deal: the ${brand} "${name.trim()}" (${colorway || 'home'}). $${annual}M/yr in royalties.`);
+  return { brand, name: name.trim(), colorway: colorway || 'home', annual_value: annual };
+}
+
 // Asset classes — each has a return profile, a minimum buy-in, and liquidity.
 // `lock` = how many seasons it's locked; `liq` controls early-exit behavior.
 const ASSET_TYPES = {
@@ -2299,136 +3227,242 @@ function redeemInvestment(playerId, investmentId) {
 }
 
 const CAREER_EVENTS = [
-  { id: 'charity_event', title: 'Community Hero', tone: 'positive', weight: 3,
-    text: 'A charity clinic you ran quietly blew up locally. The city loves you for it.',
+  { id: 'charity_event', title: { en: 'Community Hero', zh: '社区英雄' }, tone: 'positive', weight: 3,
+    text: { en: 'A charity clinic you ran quietly blew up locally. The city loves you for it.', zh: '你默默办的慈善训练营在当地火了。这座城市因此更爱你。' },
     effects: { fan_base: [2, 6], morale: [2, 5], clout: [0, 2] } },
-  { id: 'shoe_launch', title: 'Signature Shoe Buzz', tone: 'positive', weight: 2, min_experience: 2,
-    text: 'Rumors of your own signature shoe are swirling. Your brand is rising.',
+  { id: 'shoe_launch', title: { en: 'Signature Shoe Buzz', zh: '签名鞋传闻' }, tone: 'positive', weight: 2, min_experience: 2,
+    text: { en: 'Rumors of your own signature shoe are swirling. Your brand is rising.', zh: '关于你签名鞋的传闻四起，你的个人品牌在上升。' },
     effects: { clout: [2, 6], fan_base: [1, 4], wealth: [0, 0] } },
-  { id: 'family_emergency', title: 'Family Emergency', tone: 'negative', weight: 2,
-    text: 'A family emergency pulled you away for a few days. Hard to focus on ball.',
+  { id: 'family_emergency', title: { en: 'Family Emergency', zh: '家庭突发状况' }, tone: 'negative', weight: 2,
+    text: { en: 'A family emergency pulled you away for a few days. Hard to focus on ball.', zh: '家里出了急事，你离开了好几天。很难专注打球。' },
     effects: { morale: [-12, -4] }, attr_effects: { composure: [-3, -1] } },
-  { id: 'coach_feud', title: 'Locker-Room Tension', tone: 'negative', weight: 2, min_experience: 1,
-    text: 'You and the coaching staff butted heads over your role. Teammates noticed.',
+  { id: 'coach_feud', title: { en: 'Locker-Room Tension', zh: '更衣室紧张' }, tone: 'negative', weight: 2, min_experience: 1,
+    text: { en: 'You and the coaching staff butted heads over your role. Teammates noticed.', zh: '你和教练组因为你的角色起了冲突，队友们都看在了眼里。' },
     effects: { chemistry: [-12, -3], morale: [-8, -2] }, attr_effects: { composure: [-2, -1] } },
-  { id: 'fan_feud', title: 'Online Backlash', tone: 'negative', weight: 2,
-    text: 'A clip of you out of context went viral. Social media is piling on.',
+  { id: 'fan_feud', title: { en: 'Online Backlash', zh: '网络反噬' }, tone: 'negative', weight: 2,
+    text: { en: 'A clip of you out of context went viral. Social media is piling on.', zh: '一段断章取义的视频火了，社交媒体上骂声一片。' },
     effects: { fan_base: [-6, -1], morale: [-5, -1] } },
-  { id: 'breakout_practice', title: 'Breakthrough in Practice', tone: 'positive', weight: 3,
-    text: 'Something clicked in a late-night shootaround. Your game feels sharper.',
+  { id: 'breakout_practice', title: { en: 'Breakthrough in Practice', zh: '训练突破' }, tone: 'positive', weight: 3,
+    text: { en: 'Something clicked in a late-night shootaround. Your game feels sharper.', zh: '深夜加练时突然开窍了，你的比赛感觉更锐利了。' },
     attr_effects: { work_ethic: [0, 1] } },
-  { id: 'mentor_wisdom', title: 'A Veteran Takes You Under', tone: 'positive', weight: 2,
-    text: 'A grizzled veteran spent the week teaching you the nuances of the game.',
+  { id: 'mentor_wisdom', title: { en: 'A Veteran Takes You Under', zh: '老将提携' }, tone: 'positive', weight: 2,
+    text: { en: 'A grizzled veteran spent the week teaching you the nuances of the game.', zh: '一位身经百战的老将用了一周时间，教你比赛里的那些微妙之处。' },
     effects: { morale: [1, 4] }, attr_effects: { bbiq: [1, 2], leadership: [1, 2] } },
-  { id: 'nutrition_program', title: 'Body Transformation', tone: 'positive', weight: 2,
-    text: 'A new nutritionist fixed your diet. You feel lighter and stronger.',
+  { id: 'nutrition_program', title: { en: 'Body Transformation', zh: '身体蜕变' }, tone: 'positive', weight: 2,
+    text: { en: 'A new nutritionist fixed your diet. You feel lighter and stronger.', zh: '一位新的营养师调整了你的饮食，你感觉更轻盈也更强壮了。' },
     attr_effects: { stamina: [1, 3], durability: [1, 2] } },
-  { id: 'viral_moment', title: 'Viral Highlight', tone: 'positive', weight: 3,
-    text: 'A highlight of yours is everywhere. Your name is trending.',
+  { id: 'viral_moment', title: { en: 'Viral Highlight', zh: '爆红高光' }, tone: 'positive', weight: 3,
+    text: { en: 'A highlight of yours is everywhere. Your name is trending.', zh: '你的一个高光瞬间传遍全网，你的名字上了热搜。' },
     effects: { clout: [1, 5], fan_base: [1, 5] } },
-  { id: 'league_fine', title: 'League Fine', tone: 'negative', weight: 2,
-    text: 'The league fined you for a postgame outburst. Costly, and a bad look.',
+  { id: 'league_fine', title: { en: 'League Fine', zh: '联盟罚款' }, tone: 'negative', weight: 2,
+    text: { en: 'The league fined you for a postgame outburst. Costly, and a bad look.', zh: '联盟因为你赛后的失态罚了你款。代价不小，观感也差。' },
     effects: { wealth: [-3, -1], morale: [-6, -1], clout: [-2, 0] } },
-  { id: 'charity_backfire', title: 'Charity Scandal', tone: 'negative', weight: 1,
-    text: 'A charity you endorsed was exposed for mismanaging funds. Guilt by association.',
+  { id: 'charity_backfire', title: { en: 'Charity Scandal', zh: '慈善丑闻' }, tone: 'negative', weight: 1,
+    text: { en: 'A charity you endorsed was exposed for mismanaging funds. Guilt by association.', zh: '你背书的慈善机构被曝出资金管理混乱，你被牵连了。' },
     effects: { fan_base: [-5, -1], clout: [-4, -1] } },
-  { id: 'endorsement_break', title: 'Endorsement Falls Through', tone: 'negative', weight: 2, min_experience: 1,
-    text: 'A major endorsement deal collapsed at the last minute.',
+  { id: 'endorsement_break', title: { en: 'Endorsement Falls Through', zh: '代言告吹' }, tone: 'negative', weight: 2, min_experience: 1,
+    text: { en: 'A major endorsement deal collapsed at the last minute.', zh: '一单重要代言在最后一刻谈崩了。' },
     effects: { wealth: [-5, -2], morale: [-5, -1] } },
+
+  // --- Themed events: filtered by experience/phase in maybeCareerEvent ---
+  // Rookie year: the city meets you
+  { id: 'rookie_city', title: { en: 'The City Welcomes You', zh: '城市接纳你' }, tone: 'positive', weight: 4, max_experience: 1,
+    text: { en: 'A local school invited you to speak. The kids mobbed you. You feel like you belong here now.', zh: '一所本地学校请你去演讲。孩子们蜂拥而上。你觉得自己已经属于这里了。' },
+    effects: { fan_base: [4, 10], morale: [3, 6] } },
+  { id: 'rookie_lost', title: { en: 'Lost in the City', zh: '迷失在城市里' }, tone: 'negative', weight: 3, max_experience: 1,
+    text: { en: 'You got hopelessly lost driving home from practice. Everything here still feels foreign.', zh: '训练完开车回家迷了路。这里的一切对你来说还是陌生的。' },
+    effects: { morale: [-6, -2] }, attr_effects: { composure: [-2, -1] } },
+  { id: 'rookie_first_fan', title: { en: 'First Autograph', zh: '第一个签名' }, tone: 'positive', weight: 4, max_experience: 1,
+    text: { en: 'A kid recognized you at the grocery store and asked for your autograph. You signed his notebook. You\'re somebody now.', zh: '一个孩子在超市认出了你，找你要签名。你签在了他的本子上。你终于成名了。' },
+    effects: { fan_base: [2, 5], morale: [2, 5] } },
+  // Late career: legacy and farewell
+  { id: 'legacy_speech', title: { en: 'The Speech', zh: '那场演讲' }, tone: 'positive', weight: 3, min_experience: 10,
+    text: { en: 'You gave a speech at the team\'s end-of-year dinner. Players you\'d never met came up afterward and said it meant something.', zh: '你在球队年终晚宴上发表了演讲。一些从未交集的球员事后走过来说，你的演讲对他们有意义。' },
+    effects: { clout: [3, 7], fan_base: [2, 5] }, attr_effects: { leadership: [1, 3] } },
+  { id: 'legacy_passing', title: { en: 'Passing the Torch', zh: '传火炬' }, tone: 'positive', weight: 3, min_experience: 10,
+    text: { en: 'A young player on your team asked if he could study your pre-game routine. You said yes, and something clicked — you weren\'t just playing for yourself anymore.', zh: '队里一个年轻球员问能不能研究你的赛前习惯。你答应了，那一刻有什么东西不一样了——你不再只为自己打球了。' },
+    effects: { morale: [2, 5] }, attr_effects: { leadership: [1, 2] } },
+  { id: 'legacy_body', title: { en: 'The Body Keeps Score', zh: '身体记住了代价' }, tone: 'negative', weight: 3, min_experience: 10,
+    text: { en: 'Your knees swelled up after the last game. The trainer said it\'s normal for your age. Normal doesn\'t mean painless.', zh: '上一场比赛后膝盖肿了。训练师说以你的年龄这很正常。正常不代表不疼。' },
+    effects: { morale: [-4, -1] }, attr_effects: { durability: [-2, -1] } },
+  // Championship contender: pressure year
+  { id: 'pressure_insomnia', title: { en: 'Restless Nights', zh: '夜不能寐' }, tone: 'negative', weight: 3, min_experience: 3,
+    text: { en: 'You couldn\'t sleep after the last loss. The championship window is closing and everyone knows it.', zh: '上一场失利后你失眠了。冠军窗口在关闭，所有人都知道。' },
+    effects: { morale: [-5, -2] }, attr_effects: { composure: [-2, -1] } },
+  { id: 'pressure_team_meeting', title: { en: 'Players-Only Meeting', zh: '球员会议' }, tone: 'positive', weight: 3, min_experience: 3,
+    text: { en: 'Your team held a players-only meeting after a bad stretch. No coaches, no cameras. Just honesty.', zh: '连败之后，球队开了一次没有教练、没有摄像机的球员会议。只有实话。' },
+    effects: { morale: [3, 6] }, attr_effects: { leadership: [1, 2] } },
+  { id: 'pressure_media', title: { en: 'The Media Circus', zh: '媒体围堵' }, tone: 'negative', weight: 2, min_experience: 3,
+    text: { en: 'The media has been relentless. Every loss gets dissected on every show. You turned off your phone for a week.', zh: '媒体无孔不入。每场失利都被各个节目反复剖析。你关了一周手机。' },
+    effects: { fan_base: [-3, -1], morale: [-3, -1] } },
 ];
 
 const MEDIA_SCENARIOS = [
-  { id: 'postgame_loss', trigger: 'after_loss', question: "Tough loss tonight. The fans want to hear from you.",
+  { id: 'postgame_loss', trigger: 'after_loss', question: { en: "Tough loss tonight. The fans want to hear from you.", zh: "今晚输得憋屈。球迷想听听你的说法。" },
     choices: [
-      { text: '"This one\'s on me. I need to step up."', tone: 'accountable', fan_base: [1, 6], clout: [-1, 3], chemistry: [1, 5], mvp: [0, 2] },
-      { text: '"We didn\'t execute as a group. We\'ll fix it."', tone: 'diplomatic', fan_base: [-3, 2], clout: [-2, 1], chemistry: [-6, -1], mvp: [-4, 0] },
-      { text: '"Next question. We\'re on to the next one."', tone: 'dismissive', fan_base: [-4, 0], clout: [0, 3], chemistry: [-3, 1], mvp: [-2, 1] } ] },
-  { id: 'postgame_win', trigger: 'after_win', question: "Big win tonight. What's clicking for you right now?",
+      { text: { en: '"This one\'s on me. I need to step up."', zh: '"这场怪我，我得站出来。"' }, tone: 'accountable', fan_base: [1, 6], clout: [-1, 3], chemistry: [1, 5], mvp: [0, 2] },
+      { text: { en: '"We didn\'t execute as a group. We\'ll fix it."', zh: '"我们整体没执行好，会改的。"' }, tone: 'diplomatic', fan_base: [-3, 2], clout: [-2, 1], chemistry: [-6, -1], mvp: [-4, 0] },
+      { text: { en: '"Next question. We\'re on to the next one."', zh: '"下一个问题。我们翻篇了。"' }, tone: 'dismissive', fan_base: [-4, 0], clout: [0, 3], chemistry: [-3, 1], mvp: [-2, 1] } ] },
+  { id: 'postgame_win', trigger: 'after_win', question: { en: "Big win tonight. What's clicking for you right now?", zh: "今晚大胜。你现在的状态为什么这么好？" },
     choices: [
-      { text: '"It\'s all about the guys around me. They make it easy."', tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] },
-      { text: '"I\'m just doing what I do. Nobody can guard me right now."', tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
-      { text: '"We got lucky with a few calls. Long season, staying humble."', tone: 'humble', fan_base: [1, 4], clout: [1, 4], chemistry: [1, 4], mvp: [2, 6] } ] },
-  { id: 'mvp_campaign', trigger: 'mid_season', question: "You're in the MVP conversation. How do you feel about that?",
+      { text: { en: '"It\'s all about the guys around me. They make it easy."', zh: '"全靠身边的队友，他们让我打得很轻松。"' }, tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] },
+      { text: { en: '"I\'m just doing what I do. Nobody can guard me right now."', zh: '"我就是做自己，现在没人防得住我。"' }, tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
+      { text: { en: '"We got lucky with a few calls. Long season, staying humble."', zh: '"我们占了几个判罚的便宜。赛季还长，保持谦逊。"' }, tone: 'humble', fan_base: [1, 4], clout: [1, 4], chemistry: [1, 4], mvp: [2, 6] } ] },
+  { id: 'mvp_campaign', trigger: 'mid_season', question: { en: "You're in the MVP conversation. How do you feel about that?", zh: "你进入了 MVP 的讨论。对此你怎么看？" },
     choices: [
-      { text: '"It\'s an honor just to be mentioned alongside those names."', tone: 'humble', fan_base: [1, 4], clout: [1, 5], chemistry: [1, 4], mvp: [3, 8] },
-      { text: '"My numbers speak for themselves."', tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
-      { text: '"We\'re winning games. That\'s all I care about."', tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] } ] },
-  { id: 'trade_rumors', trigger: 'random', question: "Rumors are swirling that you want out. Any truth to that?",
+      { text: { en: '"It\'s an honor just to be mentioned alongside those names."', zh: '"能和那些名字并列被提及，已经是荣誉。"' }, tone: 'humble', fan_base: [1, 4], clout: [1, 5], chemistry: [1, 4], mvp: [3, 8] },
+      { text: { en: '"My numbers speak for themselves."', zh: '"我的数据自己会说话。"' }, tone: 'confident', fan_base: [0, 5], clout: [3, 8], chemistry: [-5, 0], mvp: [5, 12] },
+      { text: { en: '"We\'re winning games. That\'s all I care about."', zh: '"我们在赢球，这才是我在乎的。"' }, tone: 'team-first', fan_base: [2, 6], clout: [0, 4], chemistry: [3, 7], mvp: [1, 5] } ] },
+  { id: 'trade_rumors', trigger: 'random', question: { en: "Rumors are swirling that you want out. Any truth to that?", zh: "有传闻说你想离开球队。这是真的吗？" },
     choices: [
-      { text: '"I\'m committed to this city and this team."', tone: 'loyal', fan_base: [3, 8], clout: [-4, 0], chemistry: [3, 8], mvp: [0, 0] },
-      { text: '"I\'m focused on basketball, not rumors."', tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 0] },
-      { text: '"I want to win championships — wherever that takes me."', tone: 'ambitious', fan_base: [-10, -2], clout: [2, 7], chemistry: [-12, -3], mvp: [-3, 1] } ] },
-  { id: 'social_media', trigger: 'random', question: "Old posts of yours have resurfaced online. How do you respond?",
+      { text: { en: '"I\'m committed to this city and this team."', zh: '"我忠于这座城市和这支球队。"' }, tone: 'loyal', fan_base: [3, 8], clout: [-4, 0], chemistry: [3, 8], mvp: [0, 0] },
+      { text: { en: '"I\'m focused on basketball, not rumors."', zh: '"我只专注篮球，不理会流言。"' }, tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 0] },
+      { text: { en: '"I want to win championships — wherever that takes me."', zh: '"我想拿总冠军——不管这需要我去哪。"' }, tone: 'ambitious', fan_base: [-10, -2], clout: [2, 7], chemistry: [-12, -3], mvp: [-3, 1] } ] },
+  { id: 'social_media', trigger: 'random', question: { en: "Old posts of yours have resurfaced online. How do you respond?", zh: "你以前的旧帖子在网上被翻了出来。你怎么回应？" },
     choices: [
-      { text: '"I was young. I\'ve grown a lot since then."', tone: 'sincere', fan_base: [-1, 3], clout: [0, 3], chemistry: [0, 2], mvp: [0, 2] },
-      { text: '"People are digging for drama. I\'m not engaging."', tone: 'defensive', fan_base: [-5, 0], clout: [-3, 1], chemistry: [-2, 1], mvp: [-5, 0] },
-      { text: 'Stay silent. Let it blow over.', tone: 'silent', fan_base: [-3, 1], clout: [-1, 1], chemistry: [0, 0], mvp: [-4, 0] } ] },
-  { id: 'rookie_wall', trigger: 'mid_season', question: "The rookie wall is real. How are you handling the grind of an 82-game season?",
+      { text: { en: '"I was young. I\'ve grown a lot since then."', zh: '"那时候我还年轻，现在成长了很多。"' }, tone: 'sincere', fan_base: [-1, 3], clout: [0, 3], chemistry: [0, 2], mvp: [0, 2] },
+      { text: { en: '"People are digging for drama. I\'m not engaging."', zh: '"有人就想挖料。我不接招。"' }, tone: 'defensive', fan_base: [-5, 0], clout: [-3, 1], chemistry: [-2, 1], mvp: [-5, 0] },
+      { text: { en: 'Stay silent. Let it blow over.', zh: '保持沉默，让它自己过去。' }, tone: 'silent', fan_base: [-3, 1], clout: [-1, 1], chemistry: [0, 0], mvp: [-4, 0] } ] },
+  { id: 'rookie_wall', trigger: 'mid_season', question: { en: "The rookie wall is real. How are you handling the grind of an 82-game season?", zh: "新秀墙是真的存在。你是怎么熬过 82 场常规赛的？" },
     choices: [
-      { text: '"The veterans warned me. I\'m leaning on my routine."', tone: 'focused', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 3], mvp: [0, 1] },
-      { text: '"Wall? I don\'t feel one. I\'m built for this."', tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-3, 0], mvp: [2, 6] },
-      { text: '"Honestly, my body hurts every day. But I\'ll keep showing up."', tone: 'candid', fan_base: [1, 5], clout: [0, 3], chemistry: [0, 2], mvp: [-1, 2] } ] },
-  { id: 'all_star_snub', trigger: 'mid_season', question: "You missed the All-Star cut. That had to sting.",
+      { text: { en: '"The veterans warned me. I\'m leaning on my routine."', zh: '"老将们提醒过我。我靠规律作息撑着。"' }, tone: 'focused', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 3], mvp: [0, 1] },
+      { text: { en: '"Wall? I don\'t feel one. I\'m built for this."', zh: '"新秀墙？我没感觉到。我就是为这个而生的。"' }, tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-3, 0], mvp: [2, 6] },
+      { text: { en: '"Honestly, my body hurts every day. But I\'ll keep showing up."', zh: '"说实话，我每天浑身都疼。但我还是会坚持上场。"' }, tone: 'candid', fan_base: [1, 5], clout: [0, 3], chemistry: [0, 2], mvp: [-1, 2] } ] },
+  { id: 'all_star_snub', trigger: 'mid_season', question: { en: "You missed the All-Star cut. That had to sting.", zh: "你落选了全明星。这一定很扎心。" },
     choices: [
-      { text: '"I\'m using it as fuel. They\'ll remember this."', tone: 'defiant', fan_base: [1, 5], clout: [2, 6], chemistry: [-1, 2], mvp: [3, 8] },
-      { text: '"There are a lot of great players. I\'ll keep working."', tone: 'humble', fan_base: [2, 5], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] },
-      { text: '"The voting is a joke. I should\'ve been in."', tone: 'dismissive', fan_base: [-5, 0], clout: [0, 3], chemistry: [-4, 0], mvp: [-2, 2] } ] },
-  { id: 'contract_talk', trigger: 'mid_season', question: "Your contract is coming up. Any message for the front office?",
+      { text: { en: '"I\'m using it as fuel. They\'ll remember this."', zh: '"我把这当作燃料，他们会记住的。"' }, tone: 'defiant', fan_base: [1, 5], clout: [2, 6], chemistry: [-1, 2], mvp: [3, 8] },
+      { text: { en: '"There are a lot of great players. I\'ll keep working."', zh: '"优秀的球员很多，我会继续努力。"' }, tone: 'humble', fan_base: [2, 5], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] },
+      { text: { en: '"The voting is a joke. I should\'ve been in."', zh: '"投票就是个笑话，我本该入选的。"' }, tone: 'dismissive', fan_base: [-5, 0], clout: [0, 3], chemistry: [-4, 0], mvp: [-2, 2] } ] },
+  { id: 'contract_talk', trigger: 'mid_season', question: { en: "Your contract is coming up. Any message for the front office?", zh: "你的合同快到期了。有什么话想对管理层说？" },
     choices: [
-      { text: '"I let my agent handle that. I\'m focused on winning."', tone: 'neutral', fan_base: [-1, 2], clout: [0, 2], chemistry: [0, 2], mvp: [0, 0] },
-      { text: '"They know what I\'m worth. Pay me like a star."', tone: 'ambitious', fan_base: [-4, 1], clout: [1, 5], chemistry: [-6, -1], mvp: [-2, 2] },
-      { text: '"I want to be here long-term and build something."', tone: 'loyal', fan_base: [2, 7], clout: [-2, 1], chemistry: [2, 6], mvp: [0, 2] } ] },
-  { id: 'coach_criticism', trigger: 'after_loss', question: "Your coach called out your effort after the game. Your response?",
+      { text: { en: '"I let my agent handle that. I\'m focused on winning."', zh: '"这些交给我经纪人，我只专注赢球。"' }, tone: 'neutral', fan_base: [-1, 2], clout: [0, 2], chemistry: [0, 2], mvp: [0, 0] },
+      { text: { en: '"They know what I\'m worth. Pay me like a star."', zh: '"他们知道我的价值，按球星的标准给我。"' }, tone: 'ambitious', fan_base: [-4, 1], clout: [1, 5], chemistry: [-6, -1], mvp: [-2, 2] },
+      { text: { en: '"I want to be here long-term and build something."', zh: '"我想长期留在这里，一起建立点什么。"' }, tone: 'loyal', fan_base: [2, 7], clout: [-2, 1], chemistry: [2, 6], mvp: [0, 2] } ] },
+  { id: 'coach_criticism', trigger: 'after_loss', question: { en: "Your coach called out your effort after the game. Your response?", zh: "赛后教练点名批评了你的态度。你怎么回应？" },
     choices: [
-      { text: '"He\'s right. I have to be better. Point taken."', tone: 'accountable', fan_base: [1, 5], clout: [-1, 2], chemistry: [2, 6], mvp: [0, 2] },
-      { text: '"He can coach. I\'ll play my game."', tone: 'defiant', fan_base: [0, 3], clout: [2, 5], chemistry: [-8, -2], mvp: [-1, 2] },
-      { text: '"I\'m not getting into a war through the media."', tone: 'diplomatic', fan_base: [-2, 1], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
-  { id: 'teammate_chemistry', trigger: 'after_win', question: "Your teammate had a career night. How do you celebrate it?",
+      { text: { en: '"He\'s right. I have to be better. Point taken."', zh: '"他说得对，我得更好。我接受。"' }, tone: 'accountable', fan_base: [1, 5], clout: [-1, 2], chemistry: [2, 6], mvp: [0, 2] },
+      { text: { en: '"He can coach. I\'ll play my game."', zh: '"他当他的教练，我打我的球。"' }, tone: 'defiant', fan_base: [0, 3], clout: [2, 5], chemistry: [-8, -2], mvp: [-1, 2] },
+      { text: { en: '"I\'m not getting into a war through the media."', zh: '"我不想通过媒体打嘴仗。"' }, tone: 'diplomatic', fan_base: [-2, 1], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
+  { id: 'teammate_chemistry', trigger: 'after_win', question: { en: "Your teammate had a career night. How do you celebrate it?", zh: "队友打出了生涯之夜。你怎么为他庆祝？" },
     choices: [
-      { text: '"That\'s my guy. I\'m happier for him than for myself."', tone: 'team-first', fan_base: [2, 6], clout: [0, 3], chemistry: [4, 9], mvp: [1, 4] },
-      { text: '"He gets open looks because of me. Happy to help."', tone: 'confident', fan_base: [-2, 2], clout: [1, 4], chemistry: [-6, -1], mvp: [1, 5] },
-      { text: '"We feed off each other. Nights like this are contagious."', tone: 'diplomatic', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 4], mvp: [0, 2] } ] },
-  { id: 'playoff_pressure', trigger: 'playoffs', question: "The whole city is watching this series. Feeling the pressure?",
+      { text: { en: '"That\'s my guy. I\'m happier for him than for myself."', zh: '"那是我兄弟，我比他还高兴。"' }, tone: 'team-first', fan_base: [2, 6], clout: [0, 3], chemistry: [4, 9], mvp: [1, 4] },
+      { text: { en: '"He gets open looks because of me. Happy to help."', zh: '"他那些空位都是我创造的，我很乐意。"' }, tone: 'confident', fan_base: [-2, 2], clout: [1, 4], chemistry: [-6, -1], mvp: [1, 5] },
+      { text: { en: '"We feed off each other. Nights like this are contagious."', zh: '"我们互相成就，这样的夜晚是会传染的。"' }, tone: 'diplomatic', fan_base: [0, 3], clout: [0, 2], chemistry: [1, 4], mvp: [0, 2] } ] },
+  { id: 'playoff_pressure', trigger: 'playoffs', question: { en: "The whole city is watching this series. Feeling the pressure?", zh: "整座城市都在盯着这轮系列赛。有压力吗？" },
     choices: [
-      { text: '"Pressure is a privilege. This is what we live for."', tone: 'leader', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [3, 7] },
-      { text: '"I\'ve been here before. I\'m not scared."', tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-2, 1], mvp: [3, 8] },
-      { text: '"Honestly, I couldn\'t sleep last night. But I\'ll be ready."', tone: 'candid', fan_base: [0, 4], clout: [-1, 2], chemistry: [1, 3], mvp: [0, 3] } ] },
-  { id: 'finals_media', trigger: 'playoffs', question: "You're on the biggest stage. What would a ring mean to you?",
+      { text: { en: '"Pressure is a privilege. This is what we live for."', zh: '"压力是一种特权，这正是我们为之而战的。"' }, tone: 'leader', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [3, 7] },
+      { text: { en: '"I\'ve been here before. I\'m not scared."', zh: '"我经历过这些，我不怕。"' }, tone: 'confident', fan_base: [0, 4], clout: [2, 6], chemistry: [-2, 1], mvp: [3, 8] },
+      { text: { en: '"Honestly, I couldn\'t sleep last night. But I\'ll be ready."', zh: '"说实话，我昨晚没睡着。但我会准备好。"' }, tone: 'candid', fan_base: [0, 4], clout: [-1, 2], chemistry: [1, 3], mvp: [0, 3] } ] },
+  { id: 'finals_media', trigger: 'playoffs', question: { en: "You're on the biggest stage. What would a ring mean to you?", zh: "你站在了最大的舞台。一枚总冠军戒指对你意味着什么？" },
     choices: [
-      { text: '"Everything. I\'ve dreamed of this since I was a kid."', tone: 'sincere', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [2, 6] },
-      { text: '"It\'s just basketball. I\'ll play my game."', tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 2] },
-      { text: '"We\'re one win closer. Ask me after we finish the job."', tone: 'focused', fan_base: [1, 4], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] } ] },
-  { id: 'retirement_question', trigger: 'random', question: "You're not getting any younger. How much longer do you want to play?",
+      { text: { en: '"Everything. I\'ve dreamed of this since I was a kid."', zh: '"意味着一切。我从小就开始做这个梦。"' }, tone: 'sincere', fan_base: [2, 6], clout: [1, 5], chemistry: [2, 5], mvp: [2, 6] },
+      { text: { en: '"It\'s just basketball. I\'ll play my game."', zh: '"就是打篮球而已，我照常打。"' }, tone: 'neutral', fan_base: [-2, 2], clout: [0, 2], chemistry: [-1, 1], mvp: [0, 2] },
+      { text: { en: '"We\'re one win closer. Ask me after we finish the job."', zh: '"我们离目标又近了一步，等拿下再问我。"' }, tone: 'focused', fan_base: [1, 4], clout: [0, 3], chemistry: [1, 3], mvp: [1, 4] } ] },
+  { id: 'retirement_question', trigger: 'random', question: { en: "You're not getting any younger. How much longer do you want to play?", zh: "岁月不饶人。你还想再打多久？" },
     choices: [
-      { text: '"Until they rip the jersey off me. I love this game."', tone: 'proud', fan_base: [2, 6], clout: [1, 4], chemistry: [2, 5], mvp: [0, 3] },
-      { text: '"I\'ll know when it\'s time. It\'s not time yet."', tone: 'candid', fan_base: [0, 3], clout: [0, 2], chemistry: [0, 2], mvp: [0, 1] },
-      { text: '"A few more rings and I\'m gone. Legacy matters."', tone: 'ambitious', fan_base: [-3, 2], clout: [1, 5], chemistry: [-4, 0], mvp: [0, 3] } ] },
-  { id: 'load_management_q', trigger: 'mid_season', question: "Fans are upset you sat out a nationally televised game. Defend yourself.",
+      { text: { en: '"Until they rip the jersey off me. I love this game."', zh: '"打到他们把我的球衣扒下来为止，我爱这项运动。"' }, tone: 'proud', fan_base: [2, 6], clout: [1, 4], chemistry: [2, 5], mvp: [0, 3] },
+      { text: { en: '"I\'ll know when it\'s time. It\'s not time yet."', zh: '"该退的时候我会知道，现在还不到时候。"' }, tone: 'candid', fan_base: [0, 3], clout: [0, 2], chemistry: [0, 2], mvp: [0, 1] },
+      { text: { en: '"A few more rings and I\'m gone. Legacy matters."', zh: '"再拿几枚戒指我就走，遗产很重要。"' }, tone: 'ambitious', fan_base: [-3, 2], clout: [1, 5], chemistry: [-4, 0], mvp: [0, 3] } ] },
+  { id: 'load_management_q', trigger: 'mid_season', question: { en: "Fans are upset you sat out a nationally televised game. Defend yourself.", zh: "球迷因为你缺席一场全国直播比赛而不满。为自己辩护一下吧。" },
     choices: [
-      { text: '"Long-term health wins rings. That\'s the priority."', tone: 'focused', fan_base: [-2, 2], clout: [0, 2], chemistry: [1, 3], mvp: [0, 2] },
-      { text: '"I play when I can. I don\'t owe anyone an explanation."', tone: 'dismissive', fan_base: [-6, -1], clout: [0, 3], chemistry: [-2, 1], mvp: [-3, 0] },
-      { text: '"I\'d rather be out there. It\'s not my call alone."', tone: 'diplomatic', fan_base: [0, 3], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
+      { text: { en: '"Long-term health wins rings. That\'s the priority."', zh: '"长期的健康才能换戒指，这才是重点。"' }, tone: 'focused', fan_base: [-2, 2], clout: [0, 2], chemistry: [1, 3], mvp: [0, 2] },
+      { text: { en: '"I play when I can. I don\'t owe anyone an explanation."', zh: '"我能上就上，不需要向任何人解释。"' }, tone: 'dismissive', fan_base: [-6, -1], clout: [0, 3], chemistry: [-2, 1], mvp: [-3, 0] },
+      { text: { en: '"I\'d rather be out there. It\'s not my call alone."', zh: '"我更想上场，但这不全是我的决定。"' }, tone: 'diplomatic', fan_base: [0, 3], clout: [0, 1], chemistry: [0, 2], mvp: [0, 1] } ] },
+  { id: 'disgruntled', trigger: 'random', question: { en: "Your frustration has been showing — you've been short with teammates and the media. What's going on?", zh: "你的不满已经藏不住了——你对队友和媒体都越来越不耐烦。到底怎么了？" },
+    choices: [
+      { text: { en: '"I\'m not happy with my situation here."', zh: '"我对这里的处境不满意。"' }, tone: 'ambitious', fan_base: [-4, 0], clout: [0, 3], chemistry: [-6, -1], mvp: [-3, 1] },
+      { text: { en: '"Just a rough stretch. I\'ll grind through it."', zh: '"只是段低谷，我会咬牙撑过去。"' }, tone: 'focused', fan_base: [1, 3], clout: [0, 2], chemistry: [2, 5], mvp: [0, 2] },
+      { text: { en: '"The locker room still believes. We\'ll figure it out."', zh: '"更衣室依然相信彼此，我们会解决的。"' }, tone: 'leader', fan_base: [0, 3], clout: [0, 2], chemistry: [3, 6], mvp: [0, 2] },
+    ] },
 ];
 
 const NARRATIVES = {
-  accountable: 'You earned respect by owning the loss. The locker room notices your leadership.',
-  diplomatic: 'Your words came across as deflecting blame. Some teammates seemed frustrated.',
-  dismissive: 'Fans and media felt brushed off. Your image took a minor hit.',
-  humble: 'Your humility played well with voters and fans alike. Respect grows quietly.',
-  confident: 'The bold statement raised eyebrows — some admire the swagger, others see arrogance.',
-  'team-first': 'Putting the team first resonated deeply. The coaching staff took note.',
-  loyal: 'Your commitment shut down the trade rumors. The city loves you for it.',
-  neutral: 'A safe answer that neither hurt nor helped. The story will likely die down.',
-  ambitious: 'Your honesty about chasing rings stirred controversy. Management is on edge.',
-  sincere: 'A sincere apology went over well. Most people respect growth.',
-  defensive: 'Your combative response amplified the controversy. Not the best look.',
-  silent: 'Silence left a vacuum. Speculation continues, but it\'ll fade with time.',
-  candid: 'Your raw honesty was refreshing. Fans appreciate the realness.',
-  defiant: 'Your defiance turned heads. Critics call it arrogance; supporters call it fire.',
-  focused: 'Your single-minded focus steadied the room. The team rallied around it.',
-  leader: 'You spoke like a leader and the locker room followed. Respect grows.',
-  proud: 'Your pride in the game is contagious. Fans and teammates feel it.',
+  accountable: { en: 'You earned respect by owning the loss. The locker room notices your leadership.', zh: '你主动揽下失利，赢得了尊重。更衣室注意到了你的担当。' },
+  diplomatic: { en: 'Your words came across as deflecting blame. Some teammates seemed frustrated.', zh: '你的话听起来像在推卸责任，一些队友面露不悦。' },
+  dismissive: { en: 'Fans and media felt brushed off. Your image took a minor hit.', zh: '球迷和媒体觉得被冷落，你的形象受了点小伤。' },
+  humble: { en: 'Your humility played well with voters and fans alike. Respect grows quietly.', zh: '你的谦逊赢得了投票人和球迷的好感，尊重在悄然累积。' },
+  confident: { en: 'The bold statement raised eyebrows — some admire the swagger, others see arrogance.', zh: '这番豪言让人侧目——有人欣赏这份狂气，也有人看成傲慢。' },
+  'team-first': { en: 'Putting the team first resonated deeply. The coaching staff took note.', zh: '把团队放在第一位，引起了深深共鸣。教练组记在了心里。' },
+  loyal: { en: 'Your commitment shut down the trade rumors. The city loves you for it.', zh: '你的忠诚表态平息了交易流言，这座城市因此更爱你。' },
+  neutral: { en: 'A safe answer that neither hurt nor helped. The story will likely die down.', zh: '一个不痛不痒的安全答案。这件事大概会慢慢过去。' },
+  ambitious: { en: 'Your honesty about chasing rings stirred controversy. Management is on edge.', zh: '你直言想要总冠军，惹来争议。管理层有些不安。' },
+  sincere: { en: 'A sincere apology went over well. Most people respect growth.', zh: '真诚的道歉反响不错，大多数人尊重成长。' },
+  defensive: { en: 'Your combative response amplified the controversy. Not the best look.', zh: '你针锋相对的回应放大了争议，观感并不好。' },
+  silent: { en: 'Silence left a vacuum. Speculation continues, but it\'ll fade with time.', zh: '沉默留下了空白。猜测还在继续，但终会随时间淡去。' },
+  candid: { en: 'Your raw honesty was refreshing. Fans appreciate the realness.', zh: '你坦诚得让人耳目一新，球迷欣赏这份真实。' },
+  defiant: { en: 'Your defiance turned heads. Critics call it arrogance; supporters call it fire.', zh: '你的倔强令人侧目。批评者说是傲慢，支持者说是血性。' },
+  focused: { en: 'Your single-minded focus steadied the room. The team rallied around it.', zh: '你的专注让更衣室安定下来，球队因此团结。' },
+  leader: { en: 'You spoke like a leader and the locker room followed. Respect grows.', zh: '你像领袖一样发言，更衣室愿意跟随。敬意在增长。' },
+  proud: { en: 'Your pride in the game is contagious. Fans and teammates feel it.', zh: '你对这项运动的热爱很有感染力，球迷和队友都感受到了。' },
 };
+
+// Notable-performance interviews — media now fires ONLY on big moments (a broken
+// record, an All-Star nod, 50+ points, a triple-double), not randomly. Each is a
+// question with choices; tone feeds the values axis like any media answer.
+const NOTABLE_MEDIA = {
+  record: {
+    question: (ctx) => `You just set a new all-time record — ${ctx.label}: ${ctx.achieved}. The whole arena is on its feet. How do you feel?`,
+    choices: [
+      { text: '"This one\'s for my teammates. I couldn\'t have done it alone."', tone: 'team-first', fan_base: [2, 5], clout: [0, 3], chemistry: [3, 7], mvp: [1, 4] },
+      { text: '"Records are meant to be broken — I\'m glad it\'s me."', tone: 'confident', fan_base: [0, 4], clout: [3, 8], chemistry: [-3, 0], mvp: [4, 8] },
+      { text: '"I\'m just grateful to play this game at this level."', tone: 'humble', fan_base: [2, 5], clout: [1, 4], chemistry: [1, 4], mvp: [2, 5] },
+    ],
+  },
+  allstar: {
+    question: () => `You were just named an All-Star. What do you want to say to the fans?`,
+    choices: [
+      { text: '"It\'s an honor. The fans voted me in — I won\'t forget that."', tone: 'humble', fan_base: [2, 6], clout: [1, 4], chemistry: [1, 4], mvp: [2, 5] },
+      { text: '"I\'ve been at this level all year. It\'s about time."', tone: 'confident', fan_base: [0, 4], clout: [3, 7], chemistry: [-3, 0], mvp: [4, 8] },
+      { text: '"This is a team award. My guys made me look good."', tone: 'team-first', fan_base: [2, 5], clout: [0, 3], chemistry: [3, 7], mvp: [1, 4] },
+    ],
+  },
+  '50pts': {
+    question: (ctx) => `You just dropped ${ctx.pts} points. The locker room is buzzing. What got into you tonight?`,
+    choices: [
+      { text: '"I was in a zone. When it\'s flowing like that, you just ride it."', tone: 'confident', fan_base: [0, 4], clout: [3, 7], chemistry: [-2, 1], mvp: [4, 8] },
+      { text: '"The ball found the open man. I just finished the plays."', tone: 'team-first', fan_base: [1, 4], clout: [0, 3], chemistry: [3, 6], mvp: [1, 3] },
+      { text: '"Hard work pays off. I\'ll be back in the gym tomorrow."', tone: 'focused', fan_base: [1, 4], clout: [1, 3], chemistry: [1, 3], mvp: [2, 4] },
+    ],
+  },
+  triple_double: {
+    question: (ctx) => `A triple-double — ${ctx.pts} points, ${ctx.reb} boards, ${ctx.ast} dimes. How do you do it all?`,
+    choices: [
+      { text: '"I try to read the game and fill whatever the team needs."', tone: 'team-first', fan_base: [1, 4], clout: [0, 3], chemistry: [3, 6], mvp: [1, 3] },
+      { text: '"I\'ve always been able to do it all. Tonight you saw it."', tone: 'confident', fan_base: [0, 4], clout: [3, 7], chemistry: [-2, 1], mvp: [3, 6] },
+      { text: '"Just playing hard and trusting my teammates."', tone: 'humble', fan_base: [2, 5], clout: [1, 3], chemistry: [1, 4], mvp: [2, 4] },
+    ],
+  },
+};
+
+// Resolve a pending notable-performance interview (set by simulateGame).
+function handleNotableMedia(playerId, choiceIndex) {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  if (!p?.media_pending) throw httpError(400, 'No pending media interview.');
+  const notable = JSON.parse(p.media_pending);
+  const scene = NOTABLE_MEDIA[notable.type];
+  if (!scene || choiceIndex < 0 || choiceIndex >= scene.choices.length) throw httpError(400, 'Invalid choice');
+  const choice = scene.choices[choiceIndex];
+  const effects = {};
+  for (const key of ['fan_base', 'clout']) {
+    if (key in choice) effects[key] = clamp((p[key] ?? 50) + randInt(choice[key][0], choice[key][1]), 0, 100);
+  }
+  if ('chemistry' in choice) nudgeBonds(playerId, randInt(choice.chemistry[0], choice.chemistry[1]));
+  if ('mvp' in choice) effects.mvp_votes = clamp((p.mvp_votes ?? 0) + randInt(choice.mvp[0], choice.mvp[1]), 0, 100);
+  addValues(playerId, MEDIA_TONE_VALUES[choice.tone] || {});
+  const lang = getLeagueState(playerId).lang || 'en';
+  const narrative = pick(NARRATIVES[choice.tone], lang) || 'Your words had a subtle impact on those around you.';
+  const parts = []; const vals = [];
+  for (const [key, val] of Object.entries(effects)) { parts.push(`${key}=?`); vals.push(val); }
+  parts.push('morale=?'); vals.push(clamp(p.morale + randInt(-3, 5), 10, 100));
+  parts.push('media_pending=NULL');
+  parts.push("updated_at=datetime('now')");
+  vals.push(playerId);
+  db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
+  const question = scene.question(notable);
+  db.prepare("INSERT INTO media_events (player_id,season_number,scenario_id,event_type,description,choice_made,narrative_result) VALUES (?,?,?,'interview',?,?,?)")
+    .run(playerId, getLeagueState(playerId).current_season, 'notable_' + notable.type, question, choice.text, pick(NARRATIVES[choice.tone], 'en'));
+  return { question, choice: choice.text, narrative, tone: choice.tone };
+}
 
 function handleMediaEvent(playerId, scenarioId, choiceIndex) {
   const scenario = MEDIA_SCENARIOS.find(s => s.id === scenarioId);
@@ -2445,7 +3479,10 @@ function handleMediaEvent(playerId, scenarioId, choiceIndex) {
     nudgeBonds(playerId, randInt(choice.chemistry[0], choice.chemistry[1]));
   }
   if ('mvp' in choice) effects.mvp_votes = clamp((p.mvp_votes ?? 0) + randInt(choice.mvp[0], choice.mvp[1]), 0, 100);
-  const narrative = NARRATIVES[choice.tone] || 'Your words had a subtle impact on those around you.';
+  // Media answers quietly shape the values axis (who you are).
+  addValues(playerId, MEDIA_TONE_VALUES[choice.tone] || {});
+  const lang = getLeagueState(playerId).lang || 'en';
+  const narrative = pick(NARRATIVES[choice.tone], lang) || 'Your words had a subtle impact on those around you.';
   const parts = []; const vals = [];
   for (const [key, val] of Object.entries(effects)) { parts.push(`${key}=?`); vals.push(val); }
   parts.push('morale=?'); vals.push(clamp(p.morale + randInt(-3, 5), 10, 100));
@@ -2453,8 +3490,8 @@ function handleMediaEvent(playerId, scenarioId, choiceIndex) {
   vals.push(playerId);
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
   db.prepare("INSERT INTO media_events (player_id,season_number,scenario_id,event_type,description,choice_made,narrative_result) VALUES (?,?,?,'interview',?,?,?)")
-    .run(playerId, getLeagueState(playerId).current_season, scenarioId, scenario.question, choice.text, narrative);
-  return { scenario: scenario.question, choice: choice.text, narrative, tone: choice.tone };
+    .run(playerId, getLeagueState(playerId).current_season, scenarioId, pick(scenario.question, 'en'), pick(choice.text, 'en'), pick(NARRATIVES[choice.tone], 'en'));
+  return { scenario: pick(scenario.question, lang), choice: pick(choice.text, lang), narrative, tone: choice.tone };
 }
 
 function getRandomMediaScenario(playerId) {
@@ -2466,20 +3503,40 @@ function getRandomMediaScenario(playerId) {
   else candidates = MEDIA_SCENARIOS.filter(s => ['random', 'after_loss', 'after_win'].includes(s.trigger));
   if (candidates.length === 0) candidates = MEDIA_SCENARIOS.slice();
 
-  // State-aware gating: some scenarios should only surface when they actually apply.
-  const p = db.prepare('SELECT age FROM players WHERE id=?').get(playerId);
+  // Context-aware gating: a bench player shouldn't get MVP/All-Star questions,
+  // a non-rookie shouldn't hit the "rookie wall", etc.
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  const g = Math.max(1, p.s_games);
+  const ppg = p.s_pts / g;
+  const star = ppg + p.s_reb / g * 0.8 + p.s_ast / g * 0.8 + p.s_stl / g * 1.5 + p.s_blk / g * 1.5;
+  const winPct = (p.s_wins + p.s_losses) > 0 ? p.s_wins / (p.s_wins + p.s_losses) : 0;
   const madeAllStar = db.prepare("SELECT id FROM career_progress WHERE player_id=? AND season_number=? AND event_type='allstar'").get(playerId, state.current_season);
   const contract = db.prepare('SELECT years FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(playerId);
-  if (madeAllStar) candidates = candidates.filter(s => s.id !== 'all_star_snub');
+
+  // all_star_snub: only a plausible snub — a near-All-Star line who didn't make it.
+  if (madeAllStar || ppg < 18) candidates = candidates.filter(s => s.id !== 'all_star_snub');
+  // mvp_campaign: only if genuinely in the conversation (elite production + winning).
+  if (star < 28 || winPct < 0.5) candidates = candidates.filter(s => s.id !== 'mvp_campaign');
+  // rookie_wall: only rookies, mid-season.
+  if ((p.experience || 0) !== 0 || g < 30) candidates = candidates.filter(s => s.id !== 'rookie_wall');
+  // load_management_q: only if the player is actually on load management.
+  if (!p.load_management) candidates = candidates.filter(s => s.id !== 'load_management_q');
+  // contract_talk: only in the final year of a contract.
   if (!contract || (contract.years ?? 0) !== 1) candidates = candidates.filter(s => s.id !== 'contract_talk');
-  if (!p || (p.age ?? 0) < 32) candidates = candidates.filter(s => s.id !== 'retirement_question');
+  // disgruntled: only when morale is genuinely low.
+  if ((p.morale ?? 75) >= 30) candidates = candidates.filter(s => s.id !== 'disgruntled');
+  // retirement_question: only veterans.
+  if ((p.age ?? 0) < 32) candidates = candidates.filter(s => s.id !== 'retirement_question');
+  // finals_media: only in the NBA Finals (round 4).
+  if (phase === 'playoffs' && state.playoff_round !== 4) candidates = candidates.filter(s => s.id !== 'finals_media');
 
   // Respect the actual last result so a win never triggers "Tough loss tonight".
   const last = db.prepare('SELECT result FROM game_logs WHERE player_id=? AND is_playoff=0 ORDER BY season_number DESC, game_number DESC LIMIT 1').get(playerId);
   if (last) {
     candidates = candidates.filter(s => !((last.result === 'W' && s.trigger === 'after_loss') || (last.result === 'L' && s.trigger === 'after_win')));
-    if (candidates.length === 0) candidates = MEDIA_SCENARIOS.slice();
   }
+  // If everything got gated out, fall back to the always-safe generic pool.
+  if (candidates.length === 0) candidates = MEDIA_SCENARIOS.filter(s => ['random', 'after_loss', 'after_win'].includes(s.trigger));
 
   // Prefer scenarios the player hasn't answered yet this season.
   const answered = new Set(db.prepare('SELECT scenario_id FROM media_events WHERE player_id=? AND season_number=?').all(playerId, state.current_season).map(r => r.scenario_id).filter(Boolean));
@@ -2494,68 +3551,212 @@ function getRandomMediaScenario(playerId) {
 // `relationships`), and choices can set `pending_event` to continue the chain.
 // Each choice applies effects (like media) plus a bond delta, and optionally a
 // new status or a "miss N games" consequence. `bond` is the growing 0-100 measure.
+// Each life choice's "tone" nudges a hidden 4-axis values coordinate — family /
+// career / money / fame. Accumulated silently, revealed at retirement as a
+// "who you are" reflection. Tones not listed here contribute nothing.
+const TONE_VALUES = {
+  pursue: { family: 2 }, commit: { family: 2 }, propose: { family: 2 }, private: { family: 2 },
+  family: { family: 3 }, close: { family: 1 }, coach: { family: 1 }, defend: { family: 1 },
+  lend: { family: 1, money: -2 }, help: { family: 1, money: -1 },
+  decline: { career: 2 }, career: { career: 3 }, end: { career: 1 }, delegate: { career: 2 },
+  learn: { career: 1 }, dismiss: { career: 1 }, 'hands-off': { career: 1 }, practical: { career: 1, money: 1 },
+  accept: { career: 1 },
+  public: { fame: 2, money: 1 }, duel: { fame: 2 }, fuel: { fame: 1 },
+  sign: { money: 1 }, trust: { money: 1 },
+};
+
+// Media tones feed the same hidden values axis — same coordinate as life choices.
+const MEDIA_TONE_VALUES = {
+  'team-first': { career: 2 }, leader: { career: 1, fame: 1 }, focused: { career: 1 }, humble: { career: 1 },
+  accountable: { career: 1 }, diplomatic: { career: 1 },
+  loyal: { family: 1 }, sincere: { family: 1 }, candid: { family: 1 },
+  ambitious: { fame: 2 }, confident: { fame: 2 }, defiant: { fame: 1 }, proud: { fame: 1 },
+};
+
+// Add a delta to the player's hidden values axis (family/career/money/fame).
+function addValues(playerId, delta) {
+  const keys = ['family', 'career', 'money', 'fame'].filter(k => (delta[k] || 0) !== 0);
+  if (!keys.length) return;
+  const p = db.prepare('SELECT life_values FROM players WHERE id=?').get(playerId);
+  const values = JSON.parse(p?.life_values || '{}');
+  for (const k of keys) values[k] = (values[k] || 0) + delta[k];
+  db.prepare("UPDATE players SET life_values=?, updated_at=datetime('now') WHERE id=?").run(JSON.stringify(values), playerId);
+}
+
 const LIFE_EVENTS = [
   // --- Love / partner chain ---
   { id: 'meet_partner', type: 'partner', intro: true, min_age: 22,
     names: ['Jordan', 'Riley', 'Sam', 'Taylor', 'Casey'],
-    question: "You hit it off with someone at a teammate's party — smart, funny, and unbothered by the fame. What do you do?",
+    question: { en: "At a teammate's party you met someone who talked to you like a person, not a highlight reel. It's been on your mind since. What do you do?", zh: "在队友的聚会上，你遇到了一个把你当普通人而不是球星来聊天的人。之后你一直忘不掉。你打算怎么做？" },
     choices: [
-      { text: "Ask them out — see where it goes.", tone: 'pursue', effects: { morale: [2, 5] }, bond: 8, next: 'dating' },
-      { text: "Keep your head down — focus on basketball.", tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
+      { text: { en: "Ask them out — see where it goes.", zh: "约对方出来——看看会怎样。" }, tone: 'pursue', effects: { morale: [2, 5] }, bond: 8, next: 'dating' },
+      { text: { en: "Keep your head down — focus on basketball.", zh: "保持低调——专注篮球。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
     ] },
   { id: 'dating', type: 'partner',
-    question: "Things are going well, but the road schedule is hard on a new relationship. How do you handle it?",
+    question: { en: "Things are going well, but the road schedule is hard on a new relationship. How do you handle it?", zh: "一切进展顺利，但漫长的客场赛程让这段新关系很吃力。你怎么处理？" },
     choices: [
-      { text: "Make time — this one matters.", tone: 'commit', effects: { morale: [1, 3] }, bond: 10, next: 'proposal' },
-      { text: "Keep it casual for now.", tone: 'casual', effects: { morale: [0, 2] }, bond: 2 },
-      { text: "End it cleanly before it gets complicated.", tone: 'end', effects: { morale: [-4, -1] }, bond: -30, status: 'ended' },
+      { text: { en: "Make time — this one matters.", zh: "挤出时间——这个人值得。" }, tone: 'commit', effects: { morale: [1, 3] }, bond: 10, next: 'proposal' },
+      { text: { en: "Keep it casual for now.", zh: "先保持轻松，不急着定义。" }, tone: 'casual', effects: { morale: [0, 2] }, bond: 2 },
+      { text: { en: "End it cleanly before it gets complicated.", zh: "在变得复杂之前，体面地结束。" }, tone: 'end', effects: { morale: [-4, -1] }, bond: -30, status: 'ended', set_flag: 'ended_relationship' },
     ] },
   { id: 'proposal', type: 'partner',
-    question: "You're ready to settle down. Do you propose?",
+    question: { en: "You're ready to settle down. Do you propose?", zh: "你准备好安定了。要求婚吗？" },
     choices: [
-      { text: "Yes — get engaged.", tone: 'propose', effects: { morale: [3, 6], fan_base: [1, 3] }, bond: 10, next: 'marriage' },
-      { text: "Not yet — a little more time.", tone: 'wait', effects: { morale: [0, 1] }, bond: 2 },
+      { text: { en: "Yes — get engaged.", zh: "求婚——订婚。" }, tone: 'propose', effects: { morale: [3, 6], fan_base: [1, 3] }, bond: 10, next: 'marriage' },
+      { text: { en: "Not yet — a little more time.", zh: "再等等——多一点时间。" }, tone: 'wait', effects: { morale: [0, 1] }, bond: 2 },
     ] },
   { id: 'marriage', type: 'partner',
-    question: "The wedding is planned. A quiet ceremony, or a big media event?",
+    question: { en: "The wedding is planned. A quiet ceremony, or a big media event?", zh: "婚礼已经排上了日程。办一场安静的仪式，还是公开的媒体盛宴？" },
     choices: [
-      { text: "Private ceremony — just family.", tone: 'private', effects: { morale: [2, 4] }, attr_effects: { composure: [1, 3] }, bond: 8, status: 'married', next: 'kids' },
-      { text: "Go public — a celebrity wedding.", tone: 'public', effects: { fan_base: [4, 8], clout: [1, 3], wealth: [-3, -1] }, bond: 4, status: 'married', next: 'kids' },
+      { text: { en: "Private ceremony — just family.", zh: "私密仪式——只有家人。" }, tone: 'private', effects: { morale: [2, 4] }, attr_effects: { composure: [1, 3] }, bond: 8, status: 'married', next: 'kids' },
+      { text: { en: "Go public — a celebrity wedding.", zh: "公开办——一场名人婚礼。" }, tone: 'public', effects: { fan_base: [4, 8], clout: [1, 3], wealth: [-3, -1] }, bond: 4, status: 'married', next: 'kids', set_flag: 'public_wedding' },
     ] },
   { id: 'kids', type: 'partner',
-    question: "Your partner brings up starting a family. How do you feel?",
+    question: { en: "Your partner brings up starting a family. How do you feel?", zh: "伴侣提起了组建家庭的事。你怎么想？" },
     choices: [
-      { text: "Let's do it — family is everything.", tone: 'family', effects: { morale: [3, 6] }, attr_effects: { composure: [1, 3] }, bond: 10 },
-      { text: "Not yet — my window is now.", tone: 'career', attr_effects: { work_ethic: [1, 2] }, bond: -4 },
+      { text: { en: "Let's do it — family is everything.", zh: "好，生——家庭比什么都重要。" }, tone: 'family', effects: { morale: [3, 6] }, attr_effects: { composure: [1, 3] }, bond: 10, next: 'kids_grow' },
+      { text: { en: "Not yet — my window is now.", zh: "再等等——我的巅峰期就是现在。" }, tone: 'career', attr_effects: { work_ethic: [1, 2] }, bond: -4 },
+    ] },
+  { id: 'fame_pressure', type: 'partner', blocked_by: 'never',
+    question: { en: "Your partner is struggling with the spotlight — the constant attention, the rumors, the strangers. It's wearing on them.", zh: "聚光灯让你的伴侣喘不过气——无休止的关注、流言、陌生人的目光。他/她越来越疲惫。" },
+    choices: [
+      { text: { en: "Step back from some of the fame.", zh: "为对方适当远离聚光灯。" }, tone: 'private', effects: { fan_base: [-3, -1], morale: [2, 4] }, bond: 12 },
+      { text: { en: "Tell them to toughen up.", zh: "让他/她学着坚强一点。" }, tone: 'dismiss', effects: { morale: [-3, -1] }, bond: -8 },
+      { text: { en: "Get them real help — a counselor.", zh: "认真帮对方——请个心理咨询师。" }, tone: 'practical', effects: { wealth: [-2, -1], morale: [1, 2] }, bond: 6 },
     ] },
 
   // --- Family chain ---
   { id: 'parent_illness', type: 'family', intro: true, min_age: 20, name: 'Mom',
-    question: "Your mom is in the hospital — serious but stable. You have a game in two days.",
+    question: { en: "Your mom's test results came back, and the doctors want to keep her a few more days. There's a game in two days.", zh: "妈妈的检查结果出来了，医生想让她再住院观察几天。而你两天后有一场比赛。" },
     choices: [
-      { text: "Fly home to be there — miss two games.", tone: 'family', effects: { fan_base: [2, 5], morale: [-6, -2] }, attr_effects: { composure: [-2, -1] }, bond: 12, miss_games: 2, next: 'family_care' },
-      { text: "Stay with the team — she'll understand.", tone: 'career', effects: { morale: [-3, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: -8, next: 'family_care' },
+      { text: { en: "Fly home to be there — miss two games.", zh: "飞回去陪她——缺席两场比赛。" }, tone: 'family', effects: { fan_base: [2, 5], morale: [-6, -2] }, attr_effects: { composure: [-2, -1] }, bond: 12, miss_games: 2, next: 'family_care' },
+      { text: { en: "Stay with the team — she'll understand.", zh: "留在队里——她会理解的。" }, tone: 'career', effects: { morale: [-3, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: -8, next: 'family_care' },
     ] },
   { id: 'family_care', type: 'family',
-    question: "Your mom is recovering slowly and keeps telling you not to worry. How do you handle it from afar?",
+    question: { en: "Your mom is recovering slowly and keeps telling you not to worry. How do you handle it from afar?", zh: "妈妈恢复得很慢，却总叫你别担心。远在千里之外，你该怎么照顾她？" },
     choices: [
-      { text: "Check in daily, keep her close.", tone: 'close', effects: { morale: [1, 3] }, bond: 6 },
-      { text: "Hire a full-time caregiver and focus on the game.", tone: 'practical', effects: { wealth: [-2, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: 2 },
+      { text: { en: "Check in daily, keep her close.", zh: "每天打电话，保持联系。" }, tone: 'close', effects: { morale: [1, 3] }, bond: 6 },
+      { text: { en: "Hire a full-time caregiver and focus on the game.", zh: "雇一个全职护工，然后专注比赛。" }, tone: 'practical', effects: { wealth: [-2, -1] }, attr_effects: { work_ethic: [1, 2] }, bond: 2 },
+    ] },
+  { id: 'sibling_success', type: 'family', intro: true, min_experience: 4, name: 'Your Sibling',
+    question: { en: "Your younger sibling just landed a big job on their own — no help from you. They're doing fine, and there's a quiet distance between you now.", zh: "你的弟弟/妹妹凭自己拿到了一份很好的工作，没靠你任何关系。他/她过得不错，但你们之间多了一层微妙的距离。" },
+    choices: [
+      { text: { en: "Reach out — bridge the gap.", zh: "主动联系——弥合这段距离。" }, tone: 'close', effects: { morale: [1, 3] }, bond: 10 },
+      { text: { en: "Let them have their space.", zh: "给他/她空间，顺其自然。" }, tone: 'hands-off', effects: { morale: [0, 1] }, bond: 2 },
     ] },
 
   // --- Friend chain ---
   { id: 'childhood_friend', type: 'friend', intro: true, min_age: 20,
     names: ['Chris', 'Jay', 'Dre', 'Devon', 'Marcus'],
-    question: "An old friend from home calls out of the blue. They're in financial trouble and asking for a loan.",
+    question: { en: "The phone rings — it's the friend you grew up with, the one who knew you before any of this. He's in financial trouble and asking for a loan.", zh: "电话响了——是和你一起长大的朋友，那个在你成名之前就认识你的人。他遇到了经济困难，想找你借钱。" },
     choices: [
-      { text: "Lend them the money.", tone: 'lend', effects: { wealth: [-3, -1] }, bond: 10, next: 'friend_trouble' },
-      { text: "Say no — you can't bail everyone out.", tone: 'decline', effects: { morale: [-2, 0] }, decline: true },
+      { text: { en: "Lend them the money.", zh: "借钱给他。" }, tone: 'lend', effects: { wealth: [-3, -1] }, bond: 10, next: 'friend_trouble' },
+      { text: { en: "Say no — you can't bail everyone out.", zh: "拒绝——你不可能帮所有人兜底。" }, tone: 'decline', effects: { morale: [-2, 0] }, decline: true },
     ] },
   { id: 'friend_trouble', type: 'friend',
-    question: "Your friend is back — this time asking for much more, and something feels off.",
+    question: { en: "Your friend is back — this time asking for much more, and something feels off.", zh: "朋友又来了——这次要的更多，而且你感觉有些不对劲。" },
     choices: [
-      { text: "Cut them off. This is a pattern.", tone: 'firm', effects: { clout: [0, 1] }, bond: -20, status: 'ended' },
-      { text: "Help once more, but draw the line.", tone: 'help', effects: { wealth: [-5, -2], morale: [-2, 0] }, bond: 4 },
+      { text: { en: "Cut them off. This is a pattern.", zh: "断绝往来。这已经是惯犯了。" }, tone: 'firm', effects: { clout: [0, 1] }, bond: -20, status: 'ended' },
+      { text: { en: "Help once more, but draw the line.", zh: "再帮一次，但把话说清楚。" }, tone: 'help', effects: { wealth: [-5, -2], morale: [-2, 0] }, bond: 4 },
+    ] },
+  { id: 'friend_jealousy', type: 'friend',
+    question: { en: "Your old friend has been distant lately — a little cold in texts, skipping your calls. Someone says he's jealous of everything you have now.", zh: "老朋友最近变得疏远——短信很冷淡，也总是错过你的电话。有人说，他是嫉妒你现在拥有的一切。" },
+    choices: [
+      { text: { en: "Confront it honestly.", zh: "坦诚地聊一聊。" }, tone: 'close', effects: { morale: [-2, 2] }, bond: 8 },
+      { text: { en: "Give him time to come around.", zh: "给他时间，等他缓过来。" }, tone: 'calm', effects: { morale: [0, 1] }, bond: 2 },
+      { text: { en: "Drift apart — you've outgrown this.", zh: "渐行渐远——你们已经不在一个世界了。" }, tone: 'hands-off', bond: -10, status: 'ended' },
+    ] },
+
+  // --- Mentor chain ---
+  { id: 'meet_mentor', type: 'mentor', intro: true, min_experience: 1,
+    names: ['Coach Rivers', 'Veteran Carter', 'Old Head Davis'],
+    question: { en: "A grizzled veteran pulls you aside after practice and says you have 'it' — and wants to teach you the rest.", zh: "一位身经百战的老将训练后把你拉到一边，说你有'那种东西'——他想把剩下的都教给你。" },
+    choices: [
+      { text: { en: "Take the mentorship.", zh: "接受这份指导。" }, tone: 'accept', effects: { morale: [1, 3] }, bond: 8, next: 'mentor_wisdom' },
+      { text: { en: "You've got this on your own.", zh: "你自己能行。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true, set_flag: 'declined_mentor' },
+    ] },
+  { id: 'mentor_wisdom', type: 'mentor',
+    question: { en: "Your mentor is teaching you the nuances — but he also wants you to carry the torch when he's gone.", zh: "导师在教你那些微妙之处——但他也希望，当他离开后，你能接过火炬。" },
+    choices: [
+      { text: { en: "Learn everything you can.", zh: "尽你所能地学。" }, tone: 'learn', attr_effects: { bbiq: [1, 2], leadership: [0, 1] }, bond: 8, next: 'mentor_retire' },
+      { text: { en: "Just play — instincts beat lectures.", zh: "上场打球就行——直觉胜过说教。" }, tone: 'dismiss', effects: { morale: [-1, 1] }, bond: -4 },
+    ] },
+  { id: 'mentor_retire', type: 'mentor',
+    question: { en: "Your mentor is retiring. He offers to publicly endorse you as the franchise's next leader.", zh: "导师要退役了。他提出要公开力挺你，成为球队的下一个领袖。" },
+    choices: [
+      { text: { en: "Accept his endorsement.", zh: "接受他的力挺。" }, tone: 'accept', effects: { clout: [1, 3], fan_base: [1, 3] }, attr_effects: { leadership: [1, 2] }, bond: 6 },
+      { text: { en: "Politely decline — make your own name.", zh: "婉拒——你想靠自己打出名堂。" }, tone: 'decline', effects: { morale: [0, 1] }, bond: 2 },
+    ] },
+
+  // --- Agent chain ---
+  { id: 'meet_agent', type: 'agent', intro: true, min_experience: 1, blocked_by: 'declined_mentor',
+    names: ['Rich Paul', 'Agent Lee', 'Tommy the Fixer'],
+    question: { en: "A slick agent wants to represent you — he promises bigger contracts but takes a hefty cut.", zh: "一位精明的经纪人想代理你——他承诺更大的合同，但要抽成不菲。" },
+    choices: [
+      { text: { en: "Sign with him.", zh: "签下他。" }, tone: 'sign', effects: { clout: [0, 2] }, bond: 6, next: 'agent_push' },
+      { text: { en: "Keep handling your own deals.", zh: "继续自己打理合同。" }, tone: 'decline', effects: { wealth: [0, 1] }, decline: true },
+    ] },
+  { id: 'agent_push', type: 'agent',
+    question: { en: "Your agent is pushing a questionable endorsement and pressuring you to sign.", zh: "经纪人正在推一个来路不明的代言，还不断施压让你签字。" },
+    choices: [
+      { text: { en: "Trust him — he knows the market.", zh: "相信他——他懂市场。" }, tone: 'trust', effects: { wealth: [1, 4], fan_base: [-2, 0] }, bond: 4 },
+      { text: { en: "Fire him and find someone honest.", zh: "炒了他，找一个诚实的人。" }, tone: 'fire', effects: { wealth: [-1, -2] }, bond: -15, status: 'ended' },
+    ] },
+
+  // --- Rival chain ---
+  { id: 'meet_rival', type: 'rival', intro: true, min_experience: 0,
+    names: ['DeMarcus Hayes', 'Jalen Carter', 'Kai Mitchell', 'Andre Washington', 'Terrence Brooks'],
+    question: { en: "A player from your draft class is being crowned the future of the league — and he's taken shots at you in interviews.", zh: "和你同届的一个新秀被捧成联盟的未来——而且他在采访里对你冷嘲热讽。" },
+    choices: [
+      { text: { en: "Make it personal.", zh: "把这事放在心上。" }, tone: 'fuel', effects: { morale: [1, 3] }, attr_effects: { work_ethic: [1, 2] }, bond: -5, next: 'rival_clash' },
+      { text: { en: "Ignore the noise.", zh: "无视这些噪音。" }, tone: 'calm', attr_effects: { composure: [1, 2] }, bond: -5, next: 'rival_clash' },
+    ] },
+  { id: 'rival_clash', type: 'rival',
+    question: { en: "You face your rival tonight. The whole league is watching.", zh: "今晚你对阵宿敌。整个联盟都在盯着。" },
+    choices: [
+      { text: { en: "Turn it into a duel — dominate him.", zh: "把它变成一场决斗——碾压他。" }, tone: 'duel', effects: { clout: [1, 4] }, attr_effects: { clutch_factor: [0, 1] }, bond: -6, next: 'rival_revenge' },
+      { text: { en: "Treat it like any other game.", zh: "当成普通比赛来打。" }, tone: 'cool', attr_effects: { composure: [2, 3] }, bond: 2, set_flag: 'cooled_rival' },
+    ] },
+  { id: 'rival_revenge', type: 'rival', blocked_by: 'cooled_rival',
+    question: { en: "Your rival is at it again — throwing shade and challenging you publicly. The rivalry has followed you.", zh: "宿敌又来了——公开挑衅你。这段恩怨一直缠着你。" },
+    choices: [
+      { text: { en: "Answer him on the court.", zh: "在球场上回应他。" }, tone: 'duel', effects: { clout: [1, 3] }, bond: -5 },
+      { text: { en: "You're past this. Let it go.", zh: "你早就看开了。算了吧。" }, tone: 'cool', attr_effects: { composure: [1, 2] }, bond: 2, set_flag: 'cooled_rival' },
+    ] },
+
+  // --- Family depth ---
+  { id: 'kids_grow', type: 'family',
+    question: { en: "Your child is old enough to pick up a basketball — and they're obsessed with your game.", zh: "你的孩子已经大到能抱起篮球了——而且对你的比赛痴迷不已。" },
+    choices: [
+      { text: { en: "Coach them yourself.", zh: "亲自教他/她打球。" }, tone: 'coach', effects: { morale: [2, 4] }, attr_effects: { leadership: [0, 1] }, bond: 6 },
+      { text: { en: "Hire a trainer — your career comes first.", zh: "请个训练师——你的职业生涯优先。" }, tone: 'delegate', effects: { wealth: [-1, -2] }, bond: 1 },
+    ] },
+  { id: 'sibling_ask', type: 'family', intro: true, min_experience: 2, name: 'Your Sibling',
+    question: { en: "Your sibling wants you to help them break into the basketball business — as an agent or front-office intern.", zh: "你的兄弟姐妹想靠你进入篮球圈——当经纪人或球队管理层实习生。" },
+    choices: [
+      { text: { en: "Open doors for them.", zh: "帮他/她打开门路。" }, tone: 'help', effects: { clout: [-1, 0], morale: [1, 3] }, bond: 8, next: 'sibling_trouble' },
+      { text: { en: "They need to earn it themselves.", zh: "他/她得靠自己争取。" }, tone: 'decline', effects: { morale: [-2, 0] }, decline: true },
+    ] },
+  { id: 'sibling_trouble', type: 'family',
+    question: { en: "Your sibling's new role is causing locker-room whispers about nepotism.", zh: "你兄弟姐妹的新职位，让更衣室里传起了'任人唯亲'的闲话。" },
+    choices: [
+      { text: { en: "Publicly defend them.", zh: "公开维护他/她。" }, tone: 'defend', effects: { fan_base: [-3, 0], morale: [1, 2] }, bond: 5 },
+      { text: { en: "Let them fight their own battle.", zh: "让他/她自己面对。" }, tone: 'hands-off', effects: { clout: [0, 1] }, bond: -3 },
+    ] },
+
+  // --- Mentor (you become the mentor) ---
+  { id: 'mentor_protege', type: 'protege', intro: true, min_experience: 3, min_leadership: 70,
+    names: ['Jalen Brooks', 'Marcus Chen', 'Devon Harris', 'Kai Thompson', 'Andre Williams'],
+    question: { en: "A rookie keeps studying your game and asking for advice. The coaches think he could be special — if someone shows him the ropes.", zh: "一个新秀总在研究你的打法，不断向你请教。教练们觉得，只要有人带，他可能成气候。" },
+    choices: [
+      { text: { en: "Take him under your wing.", zh: "把他收在麾下，亲自带。" }, tone: 'accept', effects: { morale: [1, 3] }, attr_effects: { leadership: [1, 2] }, bond: 8, next: 'protege_growth' },
+      { text: { en: "He needs to figure it out himself.", zh: "他得靠自己摸索。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
+    ] },
+  { id: 'protege_growth', type: 'protege',
+    question: { en: "Your protege is turning heads around the league. How much do you invest in his rise?", zh: "你的徒弟在联盟里崭露头角。你愿意在他的成长上投入多少？" },
+    choices: [
+      { text: { en: "Give him everything I know.", zh: "倾囊相授。" }, tone: 'coach', effects: { morale: [2, 4] }, attr_effects: { leadership: [1, 2] }, bond: 12 },
+      { text: { en: "Let him earn it, but be there when he needs me.", zh: "让他自己闯，但需要时我都在。" }, tone: 'close', effects: { morale: [0, 2] }, bond: 6 },
     ] },
 ];
 
@@ -2575,17 +3776,19 @@ function lifeBondBuffs(playerId) {
 }
 
 function getLifeOverview(playerId) {
-  const p = db.prepare('SELECT age, experience FROM players WHERE id=?').get(playerId);
+  const p = db.prepare('SELECT age, experience, flags, leadership FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
   const relationships = db.prepare('SELECT * FROM relationships WHERE player_id=? ORDER BY id').all(playerId);
   const seen = new Set(db.prepare('SELECT event_id FROM life_events WHERE player_id=? AND event_id IS NOT NULL').all(playerId).map(r => r.event_id));
+  const flags = new Set(JSON.parse(p.flags || '[]'));
+  const blocked = ev => ev && ev.blocked_by && flags.has(ev.blocked_by);
 
   const events = [];
   // Queued chain events — a relationship is waiting on its next step.
   for (const r of relationships) {
     if (r.pending_event && !seen.has(r.pending_event)) {
       const ev = LIFE_EVENTS.find(e => e.id === r.pending_event);
-      if (ev) events.push({ relationship_id: r.id, name: r.name, type: r.type, intro: false, event: ev });
+      if (ev && !blocked(ev)) events.push({ relationship_id: r.id, name: r.name, type: r.type, intro: false, event: ev });
     }
   }
   // One fresh intro event — a new person entering the story. A declined intro
@@ -2595,6 +3798,8 @@ function getLifeOverview(playerId) {
   const intros = LIFE_EVENTS.filter(e => e.intro
     && (e.min_age == null || p.age >= e.min_age)
     && (e.min_experience == null || p.experience >= e.min_experience)
+    && (e.min_leadership == null || (p.leadership ?? 0) >= e.min_leadership)
+    && !blocked(e)
     && introAvailable(playerId, e, season));
   if (intros.length) {
     const ev = choice(intros);
@@ -2613,6 +3818,52 @@ function introAvailable(playerId, ev, season) {
   return !last || (season - (last.season_number || 0)) >= 3;
 }
 
+// Whether a relationship chain is waiting on the player's next choice — a
+// "stuck" life event that should pause the simulation. Fresh intros are handled
+// separately (soft ticker marker, not a hard pause).
+function hasPendingLifeEvent(playerId) {
+  const seen = new Set(db.prepare('SELECT event_id FROM life_events WHERE player_id=? AND event_id IS NOT NULL').all(playerId).map(r => r.event_id));
+  const flags = new Set(JSON.parse(db.prepare('SELECT flags FROM players WHERE id=?').get(playerId)?.flags || '[]'));
+  const rels = db.prepare('SELECT pending_event FROM relationships WHERE player_id=?').all(playerId);
+  return rels.some(r => {
+    if (!r.pending_event || seen.has(r.pending_event)) return false;
+    const ev = LIFE_EVENTS.find(e => e.id === r.pending_event);
+    return ev && !(ev.blocked_by && flags.has(ev.blocked_by));
+  });
+}
+
+// A fresh intro (a new person entering the story) is available — surfaced as a
+// soft ticker marker, not a hard pause.
+function hasIntroLifeEvent(playerId) {
+  const p = db.prepare('SELECT age, experience, flags, leadership FROM players WHERE id=?').get(playerId);
+  if (!p) return false;
+  const season = getLeagueState(playerId).current_season;
+  const flags = new Set(JSON.parse(p.flags || '[]'));
+  const blocked = ev => ev && ev.blocked_by && flags.has(ev.blocked_by);
+  return LIFE_EVENTS.some(e => e.intro
+    && (e.min_age == null || p.age >= e.min_age)
+    && (e.min_experience == null || p.experience >= e.min_experience)
+    && (e.min_leadership == null || (p.leadership ?? 0) >= e.min_leadership)
+    && !blocked(e)
+    && introAvailable(playerId, e, season));
+}
+
+// Generate a random identity package for a new NPC.
+function generateNpcMeta(type) {
+  const traits = { en: ['ambitious', 'quiet', 'warm', 'stubborn', 'charming', 'anxious', 'loyal', 'bold'], zh: ['野心勃勃', '安静内敛', '温暖体贴', '固执己见', '魅力四射', '容易焦虑', '忠诚可靠', '大胆果断'] };
+  const jobs = { partner: { en: ['medical resident', 'teacher', 'journalist', 'designer', 'lawyer', 'musician'], zh: ['住院医生', '老师', '记者', '设计师', '律师', '音乐人'] }, friend: { en: ['personal trainer', 'barber', 'chef', 'student', 'mechanic'], zh: ['健身教练', '理发师', '厨师', '学生', '修车工'] }, mentor: { en: ['former All-Star', 'retired coach', 'veteran scout'], zh: ['前全明星球员', '退役教练', '资深球探'] }, rival: { en: ['draft class rival', 'former teammate', 'rising star'], zh: ['选秀同届对手', '前队友', '崛起新星'] }, protege: { en: ['rookie', 'young prospect', 'undrafted gem'], zh: ['新秀', '年轻新秀', '落选秀'] }, agent: { en: ['veteran agent', 'rookie agent', 'big-agency exec'], zh: ['资深经纪人', '新晋经纪人', '大公司高管'] } };
+  const lang = 'en';
+  const typeTraits = traits[lang];
+  const typeJobs = jobs[type] || jobs.friend;
+  return {
+    age: randInt(20, 38),
+    trait: choice(typeTraits),
+    job: choice(typeJobs[lang] || typeJobs.friend || ['']),
+    shared: [],
+    last_event: null,
+  };
+}
+
 function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null) {
   const ev = LIFE_EVENTS.find(e => e.id === eventId);
   if (!ev || choiceIndex < 0 || choiceIndex >= ev.choices.length) throw httpError(400, 'Invalid life event or choice');
@@ -2628,8 +3879,9 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
   if (ev.intro) {
     if (!ch.decline) {
       const name = ev.names ? choice(ev.names) : ev.name;
-      const ins = db.prepare('INSERT INTO relationships (player_id,name,type,bond,status) VALUES (?,?,?,?,?)')
-        .run(playerId, name, ev.type, 50, 'active');
+      const meta = generateNpcMeta(ev.type);
+      const ins = db.prepare('INSERT INTO relationships (player_id,name,type,bond,status,meta) VALUES (?,?,?,?,?,?)')
+        .run(playerId, name, ev.type, 50, 'active', JSON.stringify(meta));
       rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(Number(ins.lastInsertRowid));
     }
   } else if (!rel) {
@@ -2665,20 +3917,40 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
     db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
   }
 
+  // Hidden 4-axis values (family/career/money/fame) accumulate silently from the
+  // choice's tone — they shape the retirement reflection, not any visible stat.
+  addValues(playerId, TONE_VALUES[ch.tone] || MEDIA_TONE_VALUES[ch.tone] || {});
+  // Flags: some choices change the story going forward (e.g., a cooled-down
+  // rivalry skips future rival events).
+  if (ch.set_flag) {
+    const flags = new Set(JSON.parse(p.flags || '[]'));
+    flags.add(ch.set_flag);
+    db.prepare("UPDATE players SET flags=?, updated_at=datetime('now') WHERE id=?").run(JSON.stringify([...flags]), playerId);
+  }
+
   let newBond = null, newStatus = null, nextEvent = null;
   if (rel) {
     newBond = clamp((rel.bond || 50) + (ch.bond || 0), 0, 100);
     newStatus = ch.status || rel.status;
     const pending = ch.next || null;
-    db.prepare('UPDATE relationships SET bond=?, status=?, pending_event=? WHERE id=?').run(newBond, newStatus, pending, rel.id);
+    // Append shared memory to NPC's identity card.
+    let meta = {};
+    try { meta = JSON.parse(rel.meta || '{}'); } catch {}
+    if (!meta.shared) meta.shared = [];
+    const summary = pick(ch.text, 'en');
+    if (summary && !meta.shared.includes(summary)) meta.shared.push(summary);
+    if (meta.shared.length > 6) meta.shared = meta.shared.slice(-6); // keep last 6
+    meta.last_event = ev.id;
+    db.prepare('UPDATE relationships SET bond=?, status=?, pending_event=?, meta=? WHERE id=?').run(newBond, newStatus, pending, JSON.stringify(meta), rel.id);
     if (pending) nextEvent = LIFE_EVENTS.find(e => e.id === pending);
   }
 
   db.prepare('INSERT INTO life_events (player_id,season_number,event_id,relationship_id,description,choice_made) VALUES (?,?,?,?,?,?)')
-    .run(playerId, season, ev.id, rel ? rel.id : null, ev.question, ch.text);
+    .run(playerId, season, ev.id, rel ? rel.id : null, pick(ev.question, 'en'), pick(ch.text, 'en'));
 
+  const lang = getLeagueState(playerId).lang || 'en';
   return {
-    event: ev.question, choice: ch.text,
+    event: pick(ev.question, lang), choice: pick(ch.text, lang),
     relationship: rel ? { id: rel.id, name: rel.name, type: rel.type, bond: newBond, status: newStatus } : null,
     effects,
     next_event: nextEvent ? nextEvent.id : null,
@@ -2695,7 +3967,8 @@ function requestTrade(playerId, desiredTeamId) {
   const state = getLeagueState(playerId);
   if (state.current_phase === 'playoffs') throw httpError(400, 'Trades are not allowed during the playoffs.');
   if (p.clout < 25) return { success: false, message: "You don't have enough influence yet. Build your reputation first." };
-  const success = Math.random() < Math.min(0.85, p.clout / 120.0);
+  const chem = teamChemistry(playerId);
+  const success = Math.random() < Math.min(0.9, p.clout / 120.0 + Math.max(0, 50 - chem) / 150);
   if (success) {
     // Move the player, sync their contract, and inherit the new team's actual
     // record (from team_records) instead of resetting to 0-0 — otherwise a late
@@ -2707,6 +3980,7 @@ function requestTrade(playerId, desiredTeamId) {
     if (contract) db.prepare('UPDATE contracts SET team_id=? WHERE id=?').run(desiredTeamId, contract.id);
     db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,'trade',?)")
       .run(playerId, season, `Forced trade to ${TEAMS[desiredTeamId].name}`);
+    syncTeammates(playerId, true);
     return { success: true, new_team: TEAMS[desiredTeamId].name, message: "The trade demand worked. You've been moved — a fresh start awaits." };
   }
   db.prepare('UPDATE players SET clout=MAX(0,clout-6),chemistry=MAX(10,chemistry-12),morale=MAX(10,morale-8) WHERE id=?').run(playerId);
@@ -2716,6 +3990,19 @@ function requestTrade(playerId, desiredTeamId) {
 // ------------------------------------------------------------
 // Career overview
 // ------------------------------------------------------------
+// Turn the hidden values axis into a "who you were" sentence for the career page.
+function valuesReflection(valuesJson) {
+  const v = JSON.parse(valuesJson || '{}');
+  const labels = { family: 'family', career: 'the game', money: 'wealth', fame: 'the spotlight' };
+  const entries = [['family', v.family || 0], ['career', v.career || 0], ['money', v.money || 0], ['fame', v.fame || 0]]
+    .sort((a, b) => b[1] - a[1]);
+  const [top, second] = entries;
+  if (top[1] <= 0) return 'You drifted through your career without leaning hard into any one thing.';
+  const topLabel = labels[top[0]];
+  if (second[1] <= 0) return `Above all, you were defined by ${topLabel}.`;
+  return `Above all, you were defined by ${topLabel} — and, close behind, ${labels[second[0]]}.`;
+}
+
 function getCareerOverview(playerId) {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
@@ -2751,7 +4038,7 @@ function getCareerOverview(playerId) {
   const mvps = awards.filter(a => a.award_name === 'MVP').length;
   const allNba = awards.filter(a => a.award_name.includes('All-NBA')).length;
   const goat = chips * 25 + mvps * 20 + allNba * 8 + (cp / 1000) * 3 + (cr / 500) * 1 + (ca / 500) * 2;
-  const goatPct = Math.min(100, goat / 6.5);
+  const goatPct = Math.min(100, (goat + (p.goat_bonus || 0)) / 6.5);
   const pgAvg = g => (g > 0 ? round1(g / pg) : 0);
   return {
     player: { name: p.name, position: p.position, age: p.age, height: p.height, weight: p.weight, team: (TEAMS[p.team_id] || {}).name || 'FA', experience: p.experience, clout: p.clout, fan_base: p.fan_base, wealth: round2(p.wealth), morale: p.morale },
@@ -2761,6 +4048,7 @@ function getCareerOverview(playerId) {
     playoff_averages: { ppg: pgAvg(ppt), rpg: pgAvg(prb), apg: pgAvg(pas), spg: pgAvg(pst), bpg: pgAvg(pbl), topg: pgAvg(pto), mpg: pgAvg(pmin) },
     career_highs: { pts: highs?.pts || 0, reb: highs?.reb || 0, ast: highs?.ast || 0, stl: highs?.stl || 0, blk: highs?.blk || 0 },
     goat_score: round1(goatPct), championships: chips, mvps, all_nba: allNba, seasons, awards,
+    values: JSON.parse(p.life_values || '{}'), values_reflection: valuesReflection(p.life_values),
   };
 }
 
@@ -2770,7 +4058,7 @@ function getCareerOverview(playerId) {
 // Tables that are player-scoped and must be rolled back together on load, so a
 // loaded save never leaves S2/S3 data mixed in with a rolled-back S1 player.
 // team_records is league-wide but is snapshotted/restored too so standings match.
-const SNAPSHOT_TABLES = ['game_logs', 'season_summaries', 'contracts', 'contract_offers', 'endorsements', 'investments', 'media_events', 'career_progress', 'awards', 'relationships', 'life_events', 'ai_players', 'teammates'];
+const SNAPSHOT_TABLES = ['game_logs', 'season_summaries', 'contracts', 'contract_offers', 'endorsements', 'investments', 'media_events', 'career_progress', 'awards', 'relationships', 'life_events', 'ai_players', 'teammates', 'shoes'];
 
 function snapshotPlayerTables(playerId) {
   const snap = {};
@@ -2915,7 +4203,7 @@ function wrap(fn) {
 
 // Player
 app.post('/api/player/create', wrap((req) => {
-  const { name, position, age = 19, height, weight, allocations, luck_bonus, background } = req.body || {};
+  const { name, position, age = 19, height, weight, allocations, luck_bonus, background, nationality = 'USA' } = req.body || {};
   if (!POSITION_PROFILES[position]) throw httpError(400, 'Invalid position');
   if (!(age >= 19 && age <= 23)) throw httpError(400, `Age must be 19-23, got ${age}`);
   const profile = POSITION_PROFILES[position];
@@ -2924,7 +4212,7 @@ app.post('/api/player/create', wrap((req) => {
   const poolInfo = calculatePointPool(position, height, weight, luck_bonus ?? null);
   const totalAllocated = Object.values(allocations || {}).reduce((a, b) => a + b, 0);
   if (totalAllocated !== poolInfo.total_points) throw httpError(400, `Allocation total ${totalAllocated} does not match point pool ${poolInfo.total_points}`);
-  const pid = createPlayerWithPoints(name, position, age, height, weight, allocations, luck_bonus ?? null, background);
+  const pid = createPlayerWithPoints(name, position, age, height, weight, allocations, luck_bonus ?? null, background, nationality);
   const player = db.prepare('SELECT * FROM players WHERE id=?').get(pid);
   return { player_id: pid, player: sanitizePlayer(player), pool_info: poolInfo };
 }));
@@ -2955,44 +4243,169 @@ app.delete('/api/player/:id', wrap((req) => {
 
 app.get('/api/player/:id/attributes', wrap((req) => {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
-  return {
+  const result = {
     static: { height: p.height, weight: p.weight, wingspan: p.wingspan, standing_reach: p.standing_reach, hand_size: p.hand_size, frame_build: p.frame_build, body_fat_pct: p.body_fat_pct },
-    athleticism: { vertical_jump: p.vertical_jump, speed: p.speed, lateral_quickness: p.lateral_quickness, strength: p.strength, core_stability: p.core_stability, stamina: p.stamina, durability: p.durability },
-    defense: { perimeter_defense: p.perimeter_defense, help_defense: p.help_defense, steal: p.steal, rim_protection: p.rim_protection, box_out: p.box_out },
-    rebounding: { rebounding: p.rebounding },
-    scoring: { first_step: p.first_step, finishing: p.finishing, mid_range: p.mid_range, catch_shoot_3pt: p.catch_shoot_3pt, pull_up_3pt: p.pull_up_3pt, off_ball: p.off_ball, drawing_fouls: p.drawing_fouls, free_throw: p.free_throw },
-    playmaking: { ball_security: p.ball_security, pnr_vision: p.pnr_vision, passing_accuracy: p.passing_accuracy },
-    mental: { bbiq: p.bbiq, clutch_factor: p.clutch_factor, work_ethic: p.work_ethic, leadership: p.leadership, composure: p.composure },
   };
+  for (const [key, cat] of Object.entries(ATTRIBUTE_CATEGORIES)) {
+    result[key] = {};
+    for (const attr of cat.attrs) result[key][attr] = p[attr] ?? 50;
+  }
+  return result;
 }));
 
 app.get('/api/player/:id/season-stats', wrap((req) => {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
   const g = Math.max(1, p.s_games), m = Math.max(1, p.s_min);
   const pg = Math.max(1, p.p_games), pm = Math.max(1, p.p_min);
+  const per36 = tot => round1(tot * 36 / m);
+  const fga = p.s_fga, three = p.s_3pa, mid = p.s_fga_mid ?? 0;
+  const paint = Math.max(0, fga - three - mid);
+  const shotPct = v => fga > 0 ? Math.round(v / fga * 100) : 0;
   return {
     games: p.s_games, mpg: round1(m / g), ppg: round1(p.s_pts / g), rpg: round1(p.s_reb / g), apg: round1(p.s_ast / g), spg: round1(p.s_stl / g), bpg: round1(p.s_blk / g), topg: round1(p.s_tov / g),
     fg_pct: round3(p.s_fgm / Math.max(1, p.s_fga)), tp_pct: round3(p.s_3pm / Math.max(1, p.s_3pa)), ft_pct: round3(p.s_ftm / Math.max(1, p.s_fta)),
+    per36: { ppg: per36(p.s_pts), rpg: per36(p.s_reb), apg: per36(p.s_ast), spg: per36(p.s_stl), bpg: per36(p.s_blk), topg: per36(p.s_tov) },
+    shot_profile: { paint, mid, three, paint_pct: shotPct(paint), mid_pct: shotPct(mid), three_pct: shotPct(three) },
     team_wins: p.s_wins, team_losses: p.s_losses,
     playoffs: { games: p.p_games, mpg: round1(pm / pg), ppg: round1(p.p_pts / pg), rpg: round1(p.p_reb / pg), apg: round1(p.p_ast / pg), spg: round1(p.p_stl / pg), bpg: round1(p.p_blk / pg), topg: round1(p.p_tov / pg), fg_pct: round3(p.p_fgm / Math.max(1, p.p_fga)), tp_pct: round3(p.p_3pm / Math.max(1, p.p_3pa)), ft_pct: round3(p.p_ftm / Math.max(1, p.p_fta)), team_wins: p.p_wins, team_losses: p.p_losses },
   };
+}));
+
+app.get('/api/player/:id/records', wrap((req) => careerRecords(req.params.id)));
+
+app.put('/api/player/:id/tactics', wrap((req) => {
+  const validDef = ['balanced', 'lockdown_star', 'protect_paint', 'switch_everything'];
+  const validOff = ['balanced', 'push_pace', 'grind_halfcourt', 'three_heavy'];
+  const defense = req.query.defense || 'balanced';
+  const offense = req.query.offense || 'balanced';
+  if (!validDef.includes(defense)) throw httpError(400, `Invalid defense. Options: ${validDef}`);
+  if (!validOff.includes(offense)) throw httpError(400, `Invalid offense. Options: ${validOff}`);
+  // Constantly changing the system grates on the coaching staff and locker room.
+  const cur = db.prepare('SELECT tactics_defense, tactics_offense FROM players WHERE id=?').get(req.params.id);
+  if (cur && (cur.tactics_defense !== defense || cur.tactics_offense !== offense)) {
+    db.prepare('UPDATE players SET morale=MAX(10,morale-2) WHERE id=?').run(req.params.id);
+  }
+  db.prepare("UPDATE players SET tactics_defense=?, tactics_offense=?, updated_at=datetime('now') WHERE id=?").run(defense, offense, req.params.id);
+  return { tactics_defense: defense, tactics_offense: offense };
+}));
+
+// Tactical analysis: opponent tendencies, expected tactic effects, last game review.
+app.get('/api/analysis/tactics/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const state = getLeagueState(playerId = req.params.id);
+  const opponentId = state.current_phase === 'playoffs' ? state.playoff_opponent : null;
+  // If we have a scheduled opponent, analyze them.
+  let opponent = null;
+  if (opponentId) {
+    const oStr = teamStrength(req.params.id, opponentId);
+    const oTeam = TEAMS[opponentId];
+    opponent = { name: oTeam?.name, abbr: oTeam?.abbr, strength: Math.round(oStr) };
+  }
+  // Last game review.
+  const last = db.prepare('SELECT * FROM game_logs WHERE player_id=? AND is_playoff=0 ORDER BY season_number DESC, game_number DESC LIMIT 1').get(req.params.id);
+  const lastReview = last ? {
+    game: last.game_number, result: last.result, score: `${last.team_score}-${last.opponent_score}`,
+    pts: last.pts, reb: last.reb, ast: last.ast,
+    tactics: { defense: p.tactics_defense || 'balanced', offense: p.tactics_offense || 'balanced' },
+  } : null;
+  // Expected effects for each tactic (what the coefficients actually do).
+  const defenseEffects = {
+    balanced: { oppScore: '×1.00', oppThree: '×1.00', comment: 'No adjustment.' },
+    lockdown_star: { oppScore: '×0.94', oppThree: '×1.25', comment: 'Opponent scoring −6%, but their 3pt attempts +25%.' },
+    protect_paint: { oppScore: '×0.95', oppThree: '×1.40', comment: 'Opponent scoring −5%, but their 3pt attempts +40%.' },
+    switch_everything: { oppScore: '×0.96', oppThree: '×1.00', assists: '×0.70', fatigue: '+5', comment: 'Opponent scoring −3%, their assists −30%, you tire faster.' },
+  };
+  const offenseEffects = {
+    balanced: { possessions: '±0', comment: 'No adjustment.' },
+    push_pace: { possessions: '+16', fatigue: '+5', comment: 'More possessions, both teams score more, you tire faster.' },
+    grind_halfcourt: { possessions: '−12', turnovers: '×0.80', fatigue: '−4', comment: 'Fewer possessions, fewer turnovers, less fatigue.' },
+    three_heavy: { threeAttempts: '×1.50', twoAttempts: '×0.90', comment: '50% more threes, 10% fewer twos.' },
+  };
+  return { opponent, last_review: lastReview, defense_effects: defenseEffects, offense_effects: offenseEffects };
 }));
 
 app.put('/api/player/:id/role', wrap((req) => {
   const valid = ['Ball-Dominant Creator', 'Off-Ball Finisher', 'Rim Protector', 'Two-Way Wing', '3-and-D Specialist', 'Point Forward', 'Stretch Big', 'Defensive Anchor'];
   const role = req.query.role;
   if (!valid.includes(role)) throw httpError(400, `Invalid role. Options: ${valid}`);
+  const p = db.prepare('SELECT role FROM players WHERE id=?').get(req.params.id);
+  // Changing role rubs the locker room the wrong way — a small bond cost (routed
+  // through teammate bonds, not a direct chemistry write).
+  if (p && p.role !== role) {
+    db.prepare("UPDATE players SET role=?,updated_at=datetime('now') WHERE id=?").run(role, req.params.id);
+    nudgeBonds(req.params.id, -2);
+    return { role, chemistry_cost: 2 };
+  }
   db.prepare("UPDATE players SET role=?,updated_at=datetime('now') WHERE id=?").run(role, req.params.id);
   return { role };
 }));
 
 app.put('/api/player/:id/load-management', wrap((req) => {
   const enabled = req.query.enabled === 'true' ? 1 : 0;
+  const p = db.prepare('SELECT load_management, fan_base FROM players WHERE id=?').get(req.params.id);
+  // Turning load management on grumbles the fans (they paid to see a star).
+  if (p && p.load_management !== enabled && enabled) {
+    db.prepare("UPDATE players SET load_management=?, fan_base=MAX(0,fan_base-2), updated_at=datetime('now') WHERE id=?").run(enabled, req.params.id);
+    return { load_management: true, fan_cost: 2 };
+  }
   db.prepare("UPDATE players SET load_management=?,updated_at=datetime('now') WHERE id=?").run(enabled, req.params.id);
   return { load_management: enabled === 1 };
 }));
 app.post('/api/player/:id/injury-treatment', wrap((req) => applyInjuryTreatment(req.params.id, req.query.option)));
 app.post('/api/player/:id/retire', wrap((req) => resolveRetirement(req.params.id, req.query.choice)));
+app.get('/api/season/allstar-weekend-options/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  return { dunks: DUNK_TYPES, distances: DUNK_DISTANCES, racks: THREE_RACKS, dunk_eligible: dunkEligible(p), three_eligible: threeEligible(p) };
+}));
+app.post('/api/season/allstar-weekend/:id', wrap((req) => resolveAllStarWeekend(req.params.id, req.query.choice)));
+
+// Multi-round contest scoring: scores one dunk (combo) for one round.
+// dunk = comma-separated dunk IDs (e.g., "windmill,360"), distance = distance ID.
+app.get('/api/contest/dunk/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const dunkIds = (req.query.dunk || '').split(',').filter(Boolean);
+  const distId = req.query.distance;
+  const dist = DUNK_DISTANCES.find(d => d.id === distId) || DUNK_DISTANCES[0];
+  const lang = getLeagueState(req.params.id).lang || 'en';
+  const playerScore = scoreDunk(p, dunkIds, dist.penalty, 1);
+  const opponents = generateDunkOpponents();
+  const opponentScores = opponents.map(ai => {
+    const aiDunk = aiPickDunk(ai);
+    const aiDist = aiPickDistance(ai);
+    return { name: ai.name, dunk: pick(aiDunk.label, lang), distance: pick(aiDist.label, lang),
+             score: scoreDunk(ai, [aiDunk.id], aiDist.penalty, 1) };
+  });
+  const dunkLabel = dunkIds.map(id => { const d = DUNK_TYPES.find(dt => dt.id === id); return d ? pick(d.label, lang) : id; }).join(' + ');
+  const all = [{ name: p.name, dunk: dunkLabel, distance: pick(dist.label, lang), score: playerScore.total, judges: playerScore.judges, is_player: true }, ...opponentScores.map(o => ({...o, score: o.score.total, judges: o.score.judges}))]
+    .sort((a, b) => b.score - a.score);
+  return { dunk: dunkLabel, distance: pick(dist.label, lang), player_score: playerScore.total, player_judges: playerScore.judges, rankings: all, opponents: opponentScores.map(o => ({...o, score: o.score.total, judges: o.score.judges})) };
+}));
+
+// Simulate one full 3pt contest round for the player; returns all 27 ball results.
+app.get('/api/contest/three/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const moneyRack = Number(req.query.money_rack) || 0;
+  const lang = getLeagueState(req.params.id).lang || 'en';
+  const playerRound = simThreeRound(p.catch_shoot_3pt ?? 35, moneyRack);
+  const opponents = generateThreeOpponents();
+  const opponentResults = opponents.map(ai => {
+    const r = simThreeRound(ai.catch_shoot_3pt ?? 60, ai.money_rack);
+    return { name: ai.name, total: r.total };
+  });
+  const all = [{ name: p.name, total: playerRound.total, is_player: true, money_rack: moneyRack }, ...opponentResults]
+    .sort((a, b) => b.total - a.total);
+  return { racks: playerRound.racks, logo: playerRound.logo, player_total: playerRound.total, rankings: all, max_possible: 36 };
+}));
+
+app.post('/api/contest/finalize/:id', wrap((req) => {
+  return finalizeContest(req.params.id, req.query.type, Number(req.query.placement), Number(req.query.total));
+}));
+app.get('/api/player/:id/second-life', wrap((req) => ({ options: getSecondLifeOptions(req.params.id), chosen: db.prepare('SELECT second_life, legacy_score FROM players WHERE id=?').get(req.params.id) })));
+app.post('/api/player/:id/second-life', wrap((req) => chooseSecondLife(req.params.id, req.query.path)));
+app.post('/api/player/:id/second-life-advance', wrap((req) => advanceSecondLife(req.params.id)));
 
 // Development focus — the player picks one attribute to accelerate mid-season.
 app.get('/api/player/:id/focus', wrap((req) => {
@@ -3013,6 +4426,24 @@ app.get('/api/draft/point-pool', wrap((req) => {
   return calculatePointPool(position, parseFloat(height), parseFloat(weight));
 }));
 app.post('/api/draft/simulate/:id', wrap((req) => simulateDraft(req.params.id)));
+
+// Draft scouting preview: generate a draft class and show where the player
+// projects, so they can see the competition before entering the draft.
+app.get('/api/draft/preview/:id', wrap((req) => {
+  const player = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!player) throw httpError(404, 'Player not found');
+  const overall = calculateOverallRating(player);
+  const draftClass = generateDraftClass();
+  const allProspects = draftClass.map(p => ({ ...p })).concat([
+    { name: player.name, position: player.position, overall, potential: player.potential ?? 50, is_player: true },
+  ]);
+  allProspects.sort((a, b) => b.overall - a.overall);
+  const projection = allProspects.findIndex(p => p.is_player) + 1;
+  const top10 = allProspects.slice(0, 10).map((p, i) => ({
+    rank: i + 1, name: p.name, position: p.position, overall: p.overall, potential: p.potential, is_player: !!p.is_player,
+  }));
+  return { top10, projection, player_overall: overall };
+}));
 app.get('/api/draft/estimate', wrap((req) => {
   const position = req.query.position;
   let allocations = {};
@@ -3042,8 +4473,19 @@ app.post('/api/game/simulate-batch/:id', wrap((req) => {
   // Clamp to the games actually left so we never half-commit past the 82-game cap.
   count = Math.max(0, Math.min(count, 82 - state.games_played_in_season));
   const games = [];
-  for (let i = 0; i < count; i++) games.push(simulateGame(req.params.id));
-  return { games, count };
+  let paused = null;
+  for (let i = 0; i < count; i++) {
+    // A pending decision blocks the run until the player acts — the batch stops
+    // before simulating past the decision point.
+    const p = db.prepare('SELECT pending_weekend, retirement_pending, pending_option, media_pending FROM players WHERE id=?').get(req.params.id);
+    if (p.pending_weekend) { paused = { type: 'weekend', label: '🌟 All-Star Weekend', message: 'Enter the dunk contest, the three-point contest, or skip?' }; break; }
+    if (p.retirement_pending) { paused = { type: 'retire', label: '🕊️ Retirement', message: 'Retire now, or play one more year?' }; break; }
+    if (p.pending_option) { paused = { type: 'option', label: '📄 Player Option', message: 'Exercise your option, or hit free agency?' }; break; }
+    if (hasPendingLifeEvent(req.params.id)) { paused = { type: 'life', label: '👥 Life Event', message: 'Someone in your life is waiting on your answer.' }; break; }
+    if (p.media_pending) { paused = { type: 'media', label: '🎤 Media', message: 'A big moment — the media wants your reaction.' }; break; }
+    games.push(simulateGame(req.params.id));
+  }
+  return { games, count: games.length, paused };
 }));
 app.get('/api/game/logs/:id', wrap((req) => {
   const season = req.query.season ? Number(req.query.season) : null;
@@ -3058,7 +4500,10 @@ app.get('/api/game/logs/:id', wrap((req) => {
 app.get('/api/season/state', wrap((req) => getLeagueState(req.query.player_id)));
 app.post('/api/season/advance-phase', wrap((req) => { advanceLeaguePhase(req.query.player_id); return getLeagueState(req.query.player_id); }));
 app.post('/api/season/finalize/:id', wrap((req) => finalizeSeason(req.params.id)));
-app.post('/api/season/playoff-game/:id', wrap((req) => simulatePlayoffGame(req.params.id)));
+app.post('/api/season/playoff-game/:id', wrap((req) => {
+  const mods = req.query.halftime ? JSON.parse(decodeURIComponent(req.query.halftime)) : null;
+  return simulatePlayoffGame(req.params.id, mods);
+}));
 app.get('/api/season/schedule/:teamId', wrap((req) => {
   const teamId = Number(req.params.teamId);
   const sched = generateSeasonSchedule(teamId, req.query.player_id);
@@ -3068,13 +4513,42 @@ app.get('/api/season/summaries/:id', wrap((req) => ({ seasons: db.prepare('SELEC
 
 // Training
 app.get('/api/training/programs', wrap(() => ({ programs: Object.fromEntries(Object.entries(TRAINING_PROGRAMS).map(([k, v]) => [k, { desc: v.desc, primary: v.primary, secondary: v.secondary, intensity: v.intensity, injury_risk: v.inj_risk }])) })));
-app.post('/api/training/apply/:id', wrap((req) => applyTraining(req.params.id, req.query.program)));
+app.post('/api/training/apply/:id', wrap((req) => {
+  const programs = req.query.programs ? String(req.query.programs).split(',').filter(Boolean) : (req.query.program ? [req.query.program] : []);
+  return applyTraining(req.params.id, programs);
+}));
 
 // Economy
 app.get('/api/economy/endorsements/:id', wrap((req) => ({ offers: getEndorsementOffers(req.params.id) })));
 app.post('/api/economy/sign-endorsement/:id', wrap((req) => signEndorsement(req.params.id, Number(req.query.offer_id))));
 app.post('/api/economy/negotiate-endorsement/:id', wrap((req) => negotiateEndorsement(req.params.id, Number(req.query.offer_id))));
 app.get('/api/economy/endorsements-active/:id', wrap((req) => ({ endorsements: db.prepare('SELECT * FROM endorsements WHERE player_id=? AND years_remaining>0').all(req.params.id) })));
+app.post('/api/economy/tour/:id', wrap((req) => takeTour(req.params.id, req.query.destination)));
+app.get('/api/economy/shoe/:id', wrap((req) => ({ shoe: getShoe(req.params.id), brands: SHOE_BRANDS, need_clout: 60 })));
+app.post('/api/economy/sign-shoe/:id', wrap((req) => signShoe(req.params.id, req.query.brand, req.query.name, req.query.colorway)));
+app.get('/api/economy/intl/:id', wrap((req) => ({ tournament: getLeagueState(req.params.id).intl_tournament || null, options: INTL_TOURNAMENTS })));
+app.post('/api/economy/play-intl/:id', wrap((req) => playIntlTournament(req.params.id)));
+
+// Game mode: story (more narrative), classic (default), sandbox (edit attributes).
+app.get('/api/settings/:id', wrap((req) => ({ game_mode: getLeagueState(req.params.id).game_mode || 'classic', lang: getLeagueState(req.params.id).lang || 'en', modes: ['story', 'classic', 'sandbox'], langs: ['en', 'zh'] })));
+app.put('/api/settings/:id', wrap((req) => {
+  const state = getLeagueState(req.params.id);
+  const mode = req.query.mode || state.game_mode || 'classic';
+  const lang = req.query.lang || state.lang || 'en';
+  if (!['story', 'classic', 'sandbox'].includes(mode)) throw httpError(400, 'Invalid mode. Options: story, classic, sandbox');
+  if (!['en', 'zh'].includes(lang)) throw httpError(400, 'Invalid language. Options: en, zh');
+  db.prepare('UPDATE league_state SET game_mode=?, lang=? WHERE player_id=?').run(mode, lang, req.params.id);
+  return { game_mode: mode, lang };
+}));
+app.put('/api/player/:id/attribute', wrap((req) => {
+  if ((getLeagueState(req.params.id).game_mode || 'classic') !== 'sandbox') throw httpError(400, 'Attribute editing is only available in Sandbox mode.');
+  const attr = req.query.attr;
+  const value = Number(req.query.value);
+  if (!DEVELOPABLE_ATTRS.includes(attr)) throw httpError(400, `Attribute must be one of: ${DEVELOPABLE_ATTRS.join(', ')}`);
+  if (!Number.isFinite(value) || value < 10 || value > 99) throw httpError(400, 'Value must be 10-99.');
+  db.prepare(`UPDATE players SET ${attr}=?, updated_at=datetime('now') WHERE id=?`).run(value, req.params.id);
+  return { attr, value };
+}));
 app.get('/api/economy/assets', wrap(() => ({ assets: ASSET_TYPES })));
 app.post('/api/economy/invest/:id', wrap((req) => makeInvestment(req.params.id, req.query.asset_type || 'stocks', Number(req.query.amount))));
 app.post('/api/economy/redeem-investment/:id', wrap((req) => redeemInvestment(req.params.id, Number(req.query.investment_id))));
@@ -3083,13 +4557,23 @@ app.get('/api/economy/investments/:id', wrap((req) => ({ investments: db.prepare
 // Free agency
 app.get('/api/contract/offers/:id', wrap((req) => {
   const rows = db.prepare('SELECT * FROM contract_offers WHERE player_id=? AND accepted=0').all(req.params.id);
-  return { offers: rows.map(o => { const t = TEAMS[o.team_id] || {}; return { id: o.id, team: t.name || 'Team', team_abbr: t.abbr || '—', years: o.years, annual_value: o.annual_value, total_value: o.total_value, ovr: t.ovr || 0, title_shot: (t.ovr || 0) >= 84 }; }).sort((a, b) => b.annual_value - a.annual_value) };
+  return { offers: rows.map(o => { const t = TEAMS[o.team_id] || {}; const dynStr = teamStrength(req.params.id, o.team_id); const proj = teamProjection(req.params.id, o.team_id); return { id: o.id, team: t.name || 'Team', team_abbr: t.abbr || '—', years: o.years, annual_value: o.annual_value, total_value: o.total_value, ovr: Math.round(dynStr), title_shot: proj.title_pct > 0, proj_wins: proj.proj_wins, title_pct: proj.title_pct }; }).sort((a, b) => b.annual_value - a.annual_value) };
 }));
 app.post('/api/contract/sign/:id', wrap((req) => signContract(req.params.id, Number(req.query.offer_id))));
+app.post('/api/contract/negotiate/:id', wrap((req) => negotiateContract(req.params.id, Number(req.query.offer_id))));
+app.post('/api/contract/player-option/:id', wrap((req) => resolvePlayerOption(req.params.id, req.query.choice)));
 
 // Media
 app.get('/api/media/scenario/:id', wrap((req) => getRandomMediaScenario(req.params.id)));
 app.post('/api/media/respond/:id', wrap((req) => handleMediaEvent(req.params.id, req.query.scenario_id, Number(req.query.choice_index))));
+app.get('/api/media/notable/:id', wrap((req) => {
+  const p = db.prepare('SELECT media_pending FROM players WHERE id=?').get(req.params.id);
+  const notable = p?.media_pending ? JSON.parse(p.media_pending) : null;
+  if (!notable || !NOTABLE_MEDIA[notable.type]) return { notable: null };
+  const scene = NOTABLE_MEDIA[notable.type];
+  return { notable, question: scene.question(notable), choices: scene.choices.map(c => ({ text: c.text, tone: c.tone })) };
+}));
+app.post('/api/media/respond-notable/:id', wrap((req) => handleNotableMedia(req.params.id, Number(req.query.choice_index))));
 app.get('/api/media/history/:id', wrap((req) => ({ events: db.prepare('SELECT * FROM media_events WHERE player_id=? ORDER BY created_at DESC LIMIT ?').all(req.params.id, Math.min(Number(req.query.limit) || 20, 100)) })));
 
 // Life system
@@ -3100,8 +4584,10 @@ app.post('/api/life/respond/:id', wrap((req) => resolveLifeEvent(req.params.id, 
 app.get('/api/player/:id/teammates', wrap((req) => {
   syncTeammates(req.params.id);
   const season = getLeagueState(req.params.id).current_season;
-  return { teammates: db.prepare('SELECT name, position, bond FROM teammates WHERE player_id=? AND season_number=? ORDER BY bond DESC').all(req.params.id, season), chemistry: teamChemistry(req.params.id) };
+  const p = db.prepare('SELECT locker_actions_used FROM players WHERE id=?').get(req.params.id);
+  return { teammates: db.prepare('SELECT id, name, position, bond FROM teammates WHERE player_id=? AND season_number=? ORDER BY bond DESC').all(req.params.id, season), chemistry: teamChemistry(req.params.id), actions_used: p?.locker_actions_used || 0, actions_max: MAX_LOCKER_ACTIONS };
 }));
+app.post('/api/player/:id/locker-action', wrap((req) => lockerRoomAction(req.params.id, Number(req.query.teammate_id))));
 
 // Lifestyle & advisor
 app.get('/api/lifestyle/tiers', wrap(() => ({ tiers: LIFESTYLE_TIERS })));
@@ -3153,7 +4639,9 @@ app.get('/api/league/standings', wrap((req) => {
   for (const tid of ALL_TEAM_IDS) {
     const t = TEAMS[tid];
     const rec = recMap.get(tid) || { wins: 0, losses: 0 };
-    standings.push({ team_id: tid, name: t.name, abbr: t.abbr, conference: t.conf, division: t.div, wins: rec.wins, losses: rec.losses, overall: t.ovr });
+    // Live strength (roster-driven), not the frozen TEAMS[].ovr — the league evolves.
+    const overall = teamStrength(req.query.player_id, tid);
+    standings.push({ team_id: tid, name: t.name, abbr: t.abbr, conference: t.conf, division: t.div, wins: rec.wins, losses: rec.losses, overall });
   }
   const east = standings.filter(t => t.conference === 'East').sort((a, b) => b.wins - a.wins || a.team_id - b.team_id);
   const west = standings.filter(t => t.conference === 'West').sort((a, b) => b.wins - a.wins || a.team_id - b.team_id);
@@ -3163,8 +4651,159 @@ app.get('/api/league/standings', wrap((req) => {
 app.get('/api/league/players', wrap((req) => ({ players: topAIPlayers(req.query.player_id, Math.min(Number(req.query.limit) || 20, 100)) })));
 app.get('/api/league/team/:teamId', wrap((req) => teamRoster(req.query.player_id, Number(req.params.teamId))));
 app.get('/api/league/moves/:id', wrap((req) => ({ moves: db.prepare("SELECT season_number, description FROM career_progress WHERE player_id=? AND event_type='league' ORDER BY id DESC LIMIT ?").all(req.params.id, Math.min(Number(req.query.limit) || 15, 50)) })));
-app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
+app.get('/api/league/mvp-race/:id', wrap((req) => ({ race: mvpRace(req.params.id) })));
+app.get('/api/league/leaders/:id', wrap((req) => statLeaders(req.params.id)));
 
+// Playoff bracket: simulate all 4 rounds based on team strength. The player's
+// actual series (tracked in league_state) overrides the simulation.
+function simulateBracket(playerId) {
+  const state = getLeagueState(playerId);
+  const standings = getConferenceStandings(playerId);
+  const season = state.current_season;
+  const playerTeamId = db.prepare('SELECT team_id FROM players WHERE id=?').get(playerId)?.team_id;
+
+  function simSeries(teamA, teamB) {
+    if (teamA === playerTeamId || teamB === playerTeamId) {
+      if (teamA === playerTeamId || teamB === playerTeamId) {
+        const isPlayerA = teamA === playerTeamId;
+        const opponent = isPlayerA ? teamB : teamA;
+        if (state.playoff_opponent === opponent) {
+          return { wins: state.series_wins, losses: state.series_losses, winner: state.series_wins >= 4 ? teamA : state.series_losses >= 4 ? teamB : null };
+        }
+      }
+      // Player's team but not current series — simulate by strength
+    }
+    const a = teamStrength(playerId, teamA);
+    const b = teamStrength(playerId, teamB);
+    let aw = 0, bw = 0;
+    for (let i = 0; i < 7 && aw < 4 && bw < 4; i++) {
+      if (Math.random() < a / (a + b)) aw++; else bw++;
+    }
+    return { wins: aw, losses: bw, winner: aw >= 4 ? teamA : teamB };
+  }
+
+  function buildBracket(conf) {
+    const seeds = conferenceSeeds(standings, conf);
+    const r1 = [];
+    for (let i = 0; i < 4; i++) {
+      const home = seeds[i], away = seeds[7 - i];
+      if (!home || !away) continue;
+      const s = simSeries(home.team_id, away.team_id);
+      r1.push({ home: home.team_id, away: away.team_id, ...s, round: 1 });
+    }
+    const r2 = [];
+    for (let i = 0; i < r1.length; i += 2) {
+      const a = r1[i]?.winner, b = r1[i + 1]?.winner;
+      if (!a || !b) continue;
+      const s = simSeries(a, b);
+      r2.push({ home: a, away: b, ...s, round: 2 });
+    }
+    const r3 = [];
+    if (r2.length >= 2) {
+      const a = r2[0]?.winner, b = r2[1]?.winner;
+      if (a && b) { const s = simSeries(a, b); r3.push({ home: a, away: b, ...s, round: 3 }); }
+    }
+    const confChamp = r3[0]?.winner || null;
+    return { conf, seeds, round1: r1, round2: r2, round3: r3, champ: confChamp };
+  }
+
+  const eastBracket = buildBracket('East');
+  const westBracket = buildBracket('West');
+  // Finals
+  let finals = null;
+  if (eastBracket.champ && westBracket.champ) {
+    const s = simSeries(eastBracket.champ, westBracket.champ);
+    finals = { home: eastBracket.champ, away: westBracket.champ, ...s, round: 4 };
+  }
+  return { east: eastBracket, west: westBracket, finals, player_seed: state.player_seed };
+}
+
+app.get('/api/playoff/bracket/:id', wrap((req) => simulateBracket(req.params.id)));
+
+// League history: aggregate awards by season (champion, MVP, All-NBA, etc.)
+app.get('/api/league/history/:id', wrap((req) => {
+  const seasons = db.prepare('SELECT DISTINCT season_number FROM awards WHERE player_id=? ORDER BY season_number DESC').all(req.params.id);
+  const history = seasons.map(s => {
+    const awards = db.prepare('SELECT award_name FROM awards WHERE player_id=? AND season_number=?').all(req.params.id, s.season_number);
+    const champion = awards.find(a => a.award_name === 'NBA Champion') ? true : false;
+    const mvp = awards.find(a => a.award_name === 'MVP') ? true : false;
+    const allNba = awards.filter(a => a.award_name?.includes('All-NBA')).map(a => a.award_name);
+    const allDef = awards.filter(a => a.award_name?.includes('All-Defensive')).map(a => a.award_name);
+    return { season: s.season_number, champion, mvp, allNba, allDef, allAwards: awards.map(a => a.award_name) };
+  });
+  return { history };
+}));
+
+// Financial summary: income sources vs expenses for the current player.
+app.get('/api/finance/summary/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const contract = db.prepare('SELECT annual_salary, years FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(req.params.id);
+  const endorsements = db.prepare('SELECT annual_value FROM endorsements WHERE player_id=? AND years_remaining>0').all(req.params.id);
+  const shoe = db.prepare('SELECT annual_value, brand, name FROM shoes WHERE player_id=?').get(req.params.id);
+  const totalEndorse = endorsements.reduce((s, e) => s + (e.annual_value || 0), 0);
+  const lifestyleTier = LIFESTYLE_TIERS[p.lifestyle ?? 1] || {};
+  const tradeValue = clamp(Math.round(calculateOverallRating(p) * (1 - Math.max(0, (p.age - 27) * 0.02)) * ((contract?.years || 0) > 0 ? 1 : 0.6)), 0, 100);
+  return {
+    wealth: round2(p.wealth || 0),
+    income: {
+      salary: round2(contract?.annual_salary || 0),
+      endorsements: round2(totalEndorse),
+      shoe: round2(shoe?.annual_value || 0),
+      total: round2((contract?.annual_salary || 0) + totalEndorse + (shoe?.annual_value || 0)),
+    },
+    expenses: {
+      lifestyle: round2(lifestyleTier.cost || 0),
+      advisor_risk: p.advisor_trust < 30 && (p.wealth || 0) > 15 ? 'High' : 'Low',
+    },
+    tradeValue,
+    lifestyle_tier: p.lifestyle ?? 1,
+    advisor_trust: p.advisor_trust ?? 65,
+    contract_years: contract?.years || 0,
+    shoe: shoe ? { brand: shoe.brand, name: shoe.name, annual: shoe.annual_value } : null,
+  };
+}));
+
+// Player comparison: get an AI player's attributes for side-by-side display.
+app.get('/api/league/compare/:id', wrap((req) => {
+  const top = topAIPlayers(req.params.id, 10);
+  const target = req.query.ai_id ? db.prepare('SELECT id, name, position, overall FROM ai_players WHERE id=? AND player_id=?').get(Number(req.query.ai_id), req.params.id) : top[0];
+  if (!target) return { ai: null, options: top.map(a => ({ id: a.id, name: a.name, position: a.position, overall: a.overall })) };
+  // AI players don't have real attributes, so derive approximate values from overall.
+  const o = target.overall;
+  const ai = {
+    name: target.name, position: target.position, overall: o,
+    outside: clamp(Math.round(o * 0.92 + gauss(0, 5)), 35, 99),
+    inside: clamp(Math.round(o * 0.95 + gauss(0, 5)), 40, 99),
+    defense: clamp(Math.round(o * 0.9 + gauss(0, 6)), 35, 99),
+    athleticism: clamp(Math.round(o * 0.92 + gauss(0, 5)), 35, 99),
+    playmaking: clamp(Math.round(o * 0.85 + gauss(0, 6)), 30, 99),
+    mental: clamp(Math.round(o * 0.88 + gauss(0, 5)), 35, 99),
+  };
+  return { ai, options: top.map(a => ({ id: a.id, name: a.name, position: a.position, overall: a.overall })) };
+}));
+
+app.get('/api/player/:id/retirement-npcs', wrap((req) => {
+  const rels = db.prepare('SELECT * FROM relationships WHERE player_id=?').all(req.params.id);
+  const lastEvents = db.prepare('SELECT relationship_id, description, choice_made FROM life_events WHERE player_id=? AND relationship_id IS NOT NULL ORDER BY id DESC').all(req.params.id);
+  const lastByRel = {};
+  for (const e of lastEvents) { if (!lastByRel[e.relationship_id]) lastByRel[e.relationship_id] = e; }
+  return {
+    npcs: rels.map(r => {
+      let meta = {}; try { meta = JSON.parse(r.meta || '{}'); } catch {}
+      const last = lastByRel[r.id];
+      return {
+        name: r.name, type: r.type, bond: r.bond, status: r.status,
+        age: meta.age, trait: meta.trait, job: meta.job,
+        shared: (meta.shared || []).slice(-3),
+        last_event: last?.description?.slice(0, 60) || null,
+        last_choice: last?.choice_made?.slice(0, 40) || null,
+      };
+    })
+  };
+}));
+
+app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
 // Static frontend
 app.use(express.static(FRONTEND_DIR));
 app.get('/', (req, res) => res.sendFile(path.join(FRONTEND_DIR, 'index.html')));
@@ -3190,5 +4829,10 @@ module.exports = {
   LIFESTYLE_TIERS, setLifestyle, maybeAdvisorScam, maybeLifeShock, generateDraftClass,
   ensureLeaguePlayers, teamStrength, advanceLeaguePlayers, topAIPlayers, advanceLeagueMarket, tickLeagueInjuries,
   GROWTH_ARCHETYPES, rollGrowthArchetype, syncTeammates, teamChemistry, driftBonds, nudgeBonds, getLockerRoomBonds,
-  ASSET_TYPES, aiSalary, teamSalary, teamRoster, TEAM_SALARY_CAP,
+  ASSET_TYPES, aiSalary, teamSalary, teamRoster, TEAM_SALARY_CAP, teamProjection, maybePassiveTrade,
+  homeSchedule, getSecondLifeOptions, chooseSecondLife, mvpRace,
+  lockerRoomAction, maybeAllStarWeekend, resolveAllStarWeekend, advanceLeagueCoaching,
+  statLeaders, checkMilestones, negotiateContract, resolvePlayerOption, advanceSecondLife,
+  careerRecords, checkGameRecords, checkSeasonRecords, LEGEND_RECORDS,
+  tacticModifiers, teamOffDef, FRANCHISE_RECORDS,
 };
