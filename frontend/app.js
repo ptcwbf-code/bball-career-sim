@@ -1079,8 +1079,14 @@ async function renderAttributes(m) {
         </div>
         <p class="text-xs text-faint mt-2" id="focus-current"></p>
       </div>
+      <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">⚔️ Compare with Star</h3>
+        <p class="text-xs text-muted mb-3">See how you stack up against the league's best.</p>
+        <div id="compare-area"><p class="text-muted text-sm">Loading…</p></div>
+      </div>
     </div>`;
   loadFocus();
+  loadCompare();
 }
 
 async function loadFocus() {
@@ -1092,6 +1098,43 @@ async function loadFocus() {
     $('#focus-current').textContent = f.dev_focus ? `Current focus: ${f.dev_focus.replace(/_/g,' ')}` : 'No focus set.';
   } catch(e){ console.warn('loadFocus', e); }
 }
+
+async function loadCompare(aiId) {
+  const el = $('#compare-area'); if (!el) return;
+  try {
+    const url = aiId ? `/league/compare/${S.playerId}?ai_id=${aiId}` : `/league/compare/${S.playerId}`;
+    const r = await api(url);
+    const opts = r.options || [];
+    const sel = `<select id="cmp-select" onchange="loadCompare(this.value)" class="bg-bg border border-bg-border rounded-lg px-3 py-2 text-sm text-white outline-none mb-3">
+      ${opts.map(o => `<option value="${o.id}" ${r.ai && r.ai.name === o.name ? 'selected' : ''}>${o.name} (${o.position} · ${o.overall})</option>`).join('')}
+    </select>`;
+    if (!r.ai) { el.innerHTML = sel + '<p class="text-muted text-sm">No AI players to compare.</p>'; return; }
+    const p = S.player;
+    const rows = [
+      ['Overall', p.overall, r.ai.overall],
+      ['Scoring', avg(['first_step','finishing','mid_range','catch_shoot_3pt','pull_up_3pt','off_ball','drawing_fouls','free_throw']), r.ai.scoring],
+      ['Defense', avg(['perimeter_defense','help_defense','steal','rim_protection','box_out']), r.ai.defense],
+      ['Athleticism', avg(['vertical_jump','speed','lateral_quickness','strength','stamina']), r.ai.athleticism],
+      ['Playmaking', avg(['ball_security','pnr_vision','passing_accuracy']), r.ai.playmaking],
+      ['Mental', avg(['bbiq','clutch_factor','composure']), r.ai.mental],
+    ];
+    const diff = (a, b) => { const d = a - b; return d > 0 ? `<span class="text-good">+${d}</span>` : d < 0 ? `<span class="text-bad">${d}</span>` : '<span class="text-muted">0</span>'; };
+    el.innerHTML = sel + `
+      <table class="w-full text-xs">
+        <thead><tr class="text-muted border-b border-bg-border text-left">
+          <th class="py-1 pr-2">Dimension</th><th class="pr-2 text-center">You</th><th class="pr-2 text-center">${esc(r.ai.name)}</th><th class="text-center">Diff</th>
+        </tr></thead>
+        <tbody>${rows.map(([label, pv, av]) => `<tr class="border-b border-bg-border">
+          <td class="py-1 pr-2 text-white">${label}</td>
+          <td class="pr-2 text-center mono ${pv>=80?'text-accent':pv>=70?'text-cyber':'text-gray-300'}">${pv}</td>
+          <td class="pr-2 text-center mono ${av>=80?'text-accent':av>=70?'text-cyber':'text-gray-300'}">${av}</td>
+          <td class="text-center mono">${diff(pv, av)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+  } catch(e) { el.innerHTML = '<p class="text-muted text-sm">Couldn\'t load comparison.</p>'; }
+}
+
+function avg(attrs) { return Math.round(attrs.reduce((s, a) => s + (S.player[a] ?? 50), 0) / attrs.length); }
 
 async function setFocus() {
   const attr = $('#focus-select')?.value || '';
@@ -2540,6 +2583,10 @@ async function renderOffCourt(m) {
         <div id="oc-intl"></div>
       </div>
       <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">💰 Financial Summary</h3>
+        <div id="oc-finance"><p class="text-muted text-sm">Loading…</p></div>
+      </div>
+      <div class="card p-5">
         <h3 class="text-sm font-semibold text-gray-300 mb-3">📈 ${t('Investments')}</h3>
         <p class="text-xs text-muted mb-3">Wealth: <b class="text-accent">$${S.player.wealth?.toFixed(2)||'0.00'}M</b> · Market: <b class="${marketLabel(S.season?.market).c}">${marketLabel(S.season?.market).t}</b></p>
         <form id="inv-form" class="flex gap-2 mb-4 flex-wrap items-end">
@@ -2580,7 +2627,7 @@ async function renderOffCourt(m) {
       </div>
     </div>`;
   loadMedia(); loadEndorse(); loadInvest(); loadLife(); loadLifestyle(); loadLockerRoom();
-  loadShoe(); loadTour(); loadIntl();
+  loadShoe(); loadTour(); loadIntl(); loadFinance();
   if (S.player.free_agent) loadContractOffers();
 }
 
@@ -2663,6 +2710,31 @@ async function playIntl() {
   const r = await api(`/economy/play-intl/${S.playerId}`, { method:'POST' });
   toast(`${r.tournament}: ${r.medal_label} — +${r.fan_base} fan, +${r.clout} clout.`, 'success');
   await refreshPlayer(); loadIntl(); loadTour();
+}
+
+async function loadFinance() {
+  const el = $('#oc-finance'); if (!el) return;
+  try {
+    const r = await api(`/finance/summary/${S.playerId}`);
+    const inc = r.income || {};
+    const exp = r.expenses || {};
+    const net = Math.round(((inc.total || 0) - (exp.lifestyle || 0)) * 100) / 100;
+    el.innerHTML = `
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div><div class="text-[10px] text-muted">Salary</div><div class="text-sm font-bold text-good mono">$${inc.salary?.toFixed(1)||'0'}M</div></div>
+        <div><div class="text-[10px] text-muted">Endorsements</div><div class="text-sm font-bold text-good mono">$${inc.endorsements?.toFixed(1)||'0'}M</div></div>
+        <div><div class="text-[10px] text-muted">Shoe${r.shoe?' ('+r.shoe.brand+')':''}</div><div class="text-sm font-bold text-good mono">$${inc.shoe?.toFixed(1)||'0'}M</div></div>
+        <div><div class="text-[10px] text-muted">Lifestyle</div><div class="text-sm font-bold text-bad mono">−$${exp.lifestyle?.toFixed(1)||'0'}M</div></div>
+      </div>
+      <div class="flex items-center justify-between border-t border-bg-border pt-2">
+        <div><span class="text-xs text-muted">Net income: </span><span class="text-sm font-bold mono ${net>=0?'text-good':'text-bad'}">${net>=0?'+':''}$${net.toFixed(1)}M</span></div>
+        <div><span class="text-xs text-muted">Total wealth: </span><span class="text-sm font-bold mono text-accent">$${r.wealth?.toFixed(2)||'0'}M</span></div>
+      </div>
+      <div class="flex items-center justify-between border-t border-bg-border pt-2 mt-2">
+        <span class="text-xs text-muted">Trade value: <b class="text-cyber">${r.tradeValue}/100</b> · Contract: ${r.contract_years>0?r.contract_years+'y left':'expired'}</span>
+        <span class="text-xs text-muted">Advisor trust: <b class="${r.advisor_trust<30?'text-bad':'text-white'}">${r.advisor_trust}</b>${r.expenses.advisor_risk==='High'?' ⚠️':' ✅'}</span>
+      </div>`;
+  } catch(e) { el.innerHTML = '<p class="text-muted text-sm">Couldn\'t load finances.</p>'; }
 }
 
 async function loadMedia() {

@@ -4437,6 +4437,54 @@ app.get('/api/league/history/:id', wrap((req) => {
   return { history };
 }));
 
+// Financial summary: income sources vs expenses for the current player.
+app.get('/api/finance/summary/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const contract = db.prepare('SELECT annual_salary, years FROM contracts WHERE player_id=? ORDER BY signed_at DESC, id DESC LIMIT 1').get(req.params.id);
+  const endorsements = db.prepare('SELECT annual_value FROM endorsements WHERE player_id=? AND years_remaining>0').all(req.params.id);
+  const shoe = db.prepare('SELECT annual_value, brand, name FROM shoes WHERE player_id=?').get(req.params.id);
+  const totalEndorse = endorsements.reduce((s, e) => s + (e.annual_value || 0), 0);
+  const lifestyleTier = LIFESTYLE_TIERS[p.lifestyle ?? 1] || {};
+  const tradeValue = clamp(Math.round(calculateOverallRating(p) * (1 - Math.max(0, (p.age - 27) * 0.02)) * ((contract?.years || 0) > 0 ? 1 : 0.6)), 0, 100);
+  return {
+    wealth: round2(p.wealth || 0),
+    income: {
+      salary: round2(contract?.annual_salary || 0),
+      endorsements: round2(totalEndorse),
+      shoe: round2(shoe?.annual_value || 0),
+      total: round2((contract?.annual_salary || 0) + totalEndorse + (shoe?.annual_value || 0)),
+    },
+    expenses: {
+      lifestyle: round2(lifestyleTier.cost || 0),
+      advisor_risk: p.advisor_trust < 30 && (p.wealth || 0) > 15 ? 'High' : 'Low',
+    },
+    tradeValue,
+    lifestyle_tier: p.lifestyle ?? 1,
+    advisor_trust: p.advisor_trust ?? 65,
+    contract_years: contract?.years || 0,
+    shoe: shoe ? { brand: shoe.brand, name: shoe.name, annual: shoe.annual_value } : null,
+  };
+}));
+
+// Player comparison: get an AI player's attributes for side-by-side display.
+app.get('/api/league/compare/:id', wrap((req) => {
+  const top = topAIPlayers(req.params.id, 10);
+  const target = req.query.ai_id ? db.prepare('SELECT id, name, position, overall FROM ai_players WHERE id=? AND player_id=?').get(Number(req.query.ai_id), req.params.id) : top[0];
+  if (!target) return { ai: null, options: top.map(a => ({ id: a.id, name: a.name, position: a.position, overall: a.overall })) };
+  // AI players don't have real attributes, so derive approximate values from overall.
+  const o = target.overall;
+  const ai = {
+    name: target.name, position: target.position, overall: o,
+    scoring: clamp(Math.round(o * 0.95 + gauss(0, 5)), 40, 99),
+    defense: clamp(Math.round(o * 0.9 + gauss(0, 6)), 35, 99),
+    athleticism: clamp(Math.round(o * 0.92 + gauss(0, 5)), 35, 99),
+    playmaking: clamp(Math.round(o * 0.85 + gauss(0, 6)), 30, 99),
+    mental: clamp(Math.round(o * 0.88 + gauss(0, 5)), 35, 99),
+  };
+  return { ai, options: top.map(a => ({ id: a.id, name: a.name, position: a.position, overall: a.overall })) };
+}));
+
 app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
 
 // Static frontend
