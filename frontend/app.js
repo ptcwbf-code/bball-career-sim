@@ -1332,28 +1332,82 @@ async function resolveWeekend(choice) {
   try {
     const opts = await api(`/season/allstar-weekend-options/${S.playerId}`);
     const items = choice === 'dunk' ? opts.dunks : opts.spots;
-    const title = choice === 'dunk' ? '🛫 Dunk Contest — pick your dunk' : '🎯 Three-Point Contest — pick your spot';
-    const overlay = document.createElement('div');
-    overlay.id = 'weekend-modal';
-    overlay.className = 'fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4';
-    overlay.innerHTML = `<div class="card p-5 w-full max-w-md">
-      <h3 class="text-lg font-bold text-white mb-3">${title}</h3>
-      <div class="space-y-2">
-        ${items.map(it=>`<button class="w-full text-left card card-hover p-3" onclick="resolveWeekendAction('${choice}','${it.id}')">
-          <div class="flex items-center justify-between"><span class="text-white font-semibold">${it.icon} ${it.label}</span><span class="text-xs text-warn mono">${choice==='dunk'?'difficulty '+it.difficulty.toFixed(1):''}</span></div>
-          <span class="text-xs text-muted">${esc(it.desc)}</span>
-        </button>`).join('')}
-      </div>
-    </div>`;
-    document.body.appendChild(overlay);
+    S._contest = { type: choice, round: 1, scores: [], opts, items };
+    showContestPicker();
   } catch(e) { toast('Failed: '+e.message,'error'); }
 }
 
-async function resolveWeekendAction(choice, action) {
-  document.getElementById('weekend-modal')?.remove();
-  const r = await api(`/season/allstar-weekend/${S.playerId}?choice=${choice}&action=${action}`, { method:'POST' });
-  toast(r.message, 'success');
-  await refreshPlayer(); renderDashboard($('#main'));
+function showContestPicker() {
+  const c = S._contest; if (!c) return;
+  document.getElementById('contest-modal')?.remove();
+  const isDunk = c.type === 'dunk';
+  const items = c.items;
+  const overlay = document.createElement('div');
+  overlay.id = 'contest-modal';
+  overlay.className = 'fixed inset-0 z-[72] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
+  overlay.innerHTML = `<div class="card p-5 w-full max-w-lg max-h-[85vh] flex flex-col">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-lg font-bold text-white">${isDunk ? '🛫 Dunk Contest' : '🎯 Three-Point Contest'}</h3>
+      <span class="text-xs text-accent font-bold">Round ${c.round} / 3</span>
+    </div>
+    <p class="text-xs text-muted mb-3">Pick your ${isDunk ? 'dunk' : 'shot spot'} for this round. 5 attempts each, scored individually.</p>
+    ${c.scores.length ? `<div class="mb-3 text-xs text-muted">Previous rounds: ${c.scores.map((s,i) => `R${i+1}=${s}`).join(' · ')} · Total so far: ${c.scores.reduce((a,b)=>a+b,0)}</div>` : ''}
+    <div class="space-y-2 flex-1 overflow-y-auto">
+      ${items.map(it => `<button class="w-full text-left card card-hover p-3" onclick="playContestRound('${c.type}','${it.id}')">
+        <div class="flex items-center justify-between"><span class="text-white font-semibold">${it.icon} ${pick(it.label, S.season?.lang)}</span><span class="text-xs text-warn mono">${isDunk ? 'difficulty '+it.difficulty.toFixed(1) : ''}</span></div>
+        <span class="text-xs text-muted">${esc(pick(it.desc, S.season?.lang))}</span>
+      </button>`).join('')}
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function playContestRound(type, action) {
+  const c = S._contest; if (!c) return;
+  document.getElementById('contest-modal')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'contest-modal';
+  overlay.className = 'fixed inset-0 z-[72] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
+  overlay.innerHTML = `<div class="card p-5 w-full max-w-lg max-h-[85vh] flex flex-col">
+    <h3 class="text-lg font-bold text-white mb-2">${type==='dunk'?'🛫 Dunk Contest':'🎯 Three-Point Contest'} — Round ${c.round}</h3>
+    <div id="contest-attempts" class="space-y-1.5 text-sm flex-1 overflow-y-auto mb-3"></div>
+    <div id="contest-round-summary" class="mb-3"></div>
+    <div id="contest-continue"></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const attemptEl = document.getElementById('contest-attempts');
+  try {
+    const r = await api(`/contest/round/${S.playerId}?type=${type}&round=${c.round}&action=${encodeURIComponent(action)}`);
+    const attempts = r.attempts || [];
+    for (const a of attempts) {
+      const scoreColor = a.score >= 9 ? '#fbbf24' : a.score >= 7 ? '#34d399' : a.score >= 5 ? '#06b6d4' : '#f87171';
+      attemptEl.insertAdjacentHTML('beforeend', `<div class="flex items-center justify-between py-1 border-b border-bg-border">
+        <span class="text-white">${a.label} #${a.attempt}</span>
+        <span class="mono font-bold" style="color:${scoreColor}">${type==='three'?(a.made?'✓ '+a.score:'✗ 0'):a.score}</span>
+      </div>
+      <p class="text-xs text-faint italic mb-1.5">${a.commentary}</p>`);
+      await sleep(600);
+    }
+    c.scores.push(r.round_total);
+    const total = c.scores.reduce((a,b) => a+b, 0);
+    document.getElementById('contest-round-summary').innerHTML = `<div class="text-center py-2 border-t border-bg-border">
+      <p class="text-sm text-muted">Round ${c.round} total: <b class="text-accent">${r.round_total}</b></p>
+      <p class="text-xs text-faint">Running total: ${total} (${c.scores.join(' + ')})</p>
+    </div>`;
+    if (c.round >= 3) {
+      await api(`/season/allstar-weekend/${S.playerId}?choice=${type}&action=${action}`, { method:'POST' });
+      document.getElementById('contest-continue').innerHTML = `
+        <div class="text-center py-3 border-t border-bg-border">
+          <p class="text-lg font-bold text-accent mb-1">Final Score: ${total}</p>
+          <p class="text-xs text-muted mb-3">Rounds: ${c.scores.map((s,i)=>`R${i+1}=${s}`).join(' · ')}</p>
+          <button class="btn-primary" onclick="document.getElementById('contest-modal')?.remove();S._contest=null;refreshPlayer().then(()=>renderDashboard(document.querySelector('#main')))">🏁 Finish</button>
+        </div>`;
+    } else {
+      document.getElementById('contest-continue').innerHTML = `<button class="btn-primary w-full mt-2" onclick="document.getElementById('contest-modal')?.remove();S._contest.round=${c.round+1};showContestPicker()">➡️ Next Round</button>`;
+    }
+  } catch(e) {
+    document.getElementById('contest-attempts').innerHTML = `<p class="text-bad text-sm">Error: ${e.message}</p>`;
+  }
 }
 
 async function resolveOption(choice) {

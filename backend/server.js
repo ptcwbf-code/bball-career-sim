@@ -4109,6 +4109,50 @@ app.post('/api/player/:id/injury-treatment', wrap((req) => applyInjuryTreatment(
 app.post('/api/player/:id/retire', wrap((req) => resolveRetirement(req.params.id, req.query.choice)));
 app.get('/api/season/allstar-weekend-options/:id', wrap(() => ({ dunks: DUNK_ACTIONS, spots: THREE_SPOTS })));
 app.post('/api/season/allstar-weekend/:id', wrap((req) => resolveAllStarWeekend(req.params.id, req.query.choice, req.query.action)));
+
+// Multi-round contest scoring: scores 5 attempts for one round.
+// type = 'dunk' or 'three', round = 1/2/3, action = dunk id or spot id.
+const DUNK_COMMENTARY = { en: { perfect: ['Absolutely electrifying!', 'The crowd is on its feet!', 'Perfection!'], great: ['What a throwdown!', 'Nasty slam!', 'The judges loved it!'], good: ['Solid dunk!', 'Respectable finish.', 'Clean slam.'], miss: ['Couldn\'t finish it.', 'The crowd winced.', 'A difficult attempt — not quite.'], }, zh: { perfect: ['太炸了！', '全场沸腾！', '完美！'], great: ['暴扣！', '扣得太狠了！', '评委都站起来鼓掌！'], good: ['稳稳的扣篮。', '中规中矩。', '干净利落。'], miss: ['没扣进去…', '现场一片叹息。', '难度太高了，没完成。'], } };
+const THREE_COMMENTARY = { en: { hot: ['On fire!', 'Automatic!', 'Splash!'], good: ['Nailed it.', 'Pure stroke.', 'Cash.'], cold: ['Just missed.', 'Rimmed out.', 'In and out.'], }, zh: { hot: ['手感火热！', '百发百中！', '稳稳命中！'], good: ['投进了。', '漂亮的手型。', '手感不错。'], cold: ['差一点。', '弹框而出。', '涮了一圈没进。'], } };
+
+app.get('/api/contest/round/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const type = req.query.type;
+  const round = Math.min(Math.max(Number(req.query.round) || 1, 1), 3);
+  const action = req.query.action;
+  if (!action) throw httpError(400, 'Missing action');
+  const lang = getLeagueState(req.params.id).lang || 'en';
+  const attempts = [];
+  if (type === 'dunk') {
+    const dunk = DUNK_ACTIONS.find(d => d.id === action) || DUNK_ACTIONS[0];
+    const attr = p[dunk.attr] ?? 50;
+    const baseDifficulty = 5.5 + dunk.difficulty * 1.15;
+    for (let i = 0; i < 5; i++) {
+      const energyPenalty = (i * 0.12);
+      const raw = baseDifficulty + (attr - 60) / 35 + gauss(0, 0.85) - energyPenalty;
+      const score = round1(clamp(raw, 2, 10));
+      let commentKey = score >= 9 ? 'perfect' : score >= 7 ? 'great' : score >= 5 ? 'good' : 'miss';
+      attempts.push({ attempt: i + 1, score, label: pick(dunk.label, lang), commentary: choice(DUNK_COMMENTARY[lang]?.[commentKey] || DUNK_COMMENTARY.en[commentKey]) });
+    }
+  } else if (type === 'three') {
+    const spot = THREE_SPOTS.find(s => s.id === action) || THREE_SPOTS[0];
+    const tp = p.catch_shoot_3pt ?? 35;
+    const makeProb = clamp(tp / 200 - (spot.difficulty - 1.0) * 0.15 + 0.15, 0.04, 0.48);
+    for (let i = 0; i < 5; i++) {
+      const made = Math.random() < makeProb;
+      const baseScore = made ? (spot.difficulty >= 2 ? 3 : 2) : 0;
+      const energyPenalty = Math.round(i * 0.3);
+      const score = Math.max(0, baseScore - energyPenalty);
+      let commentKey = score >= 3 ? 'hot' : score >= 2 ? 'good' : 'cold';
+      attempts.push({ attempt: i + 1, score, label: pick(spot.label, lang), made, commentary: choice(THREE_COMMENTARY[lang]?.[commentKey] || THREE_COMMENTARY.en[commentKey]) });
+    }
+  } else {
+    throw httpError(400, 'Invalid type. Use dunk or three.');
+  }
+  const roundTotal = attempts.reduce((s, a) => s + a.score, 0);
+  return { type, round, action, attempts, round_total: roundTotal };
+}));
 app.get('/api/player/:id/second-life', wrap((req) => ({ options: getSecondLifeOptions(req.params.id), chosen: db.prepare('SELECT second_life, legacy_score FROM players WHERE id=?').get(req.params.id) })));
 app.post('/api/player/:id/second-life', wrap((req) => chooseSecondLife(req.params.id, req.query.path)));
 app.post('/api/player/:id/second-life-advance', wrap((req) => advanceSecondLife(req.params.id)));
