@@ -187,6 +187,37 @@ function marketLabel(m) {
 const GROWTH_LABELS = { prodigy:'🌟 Prodigy', steady:'📈 Steady', late:'🌱 Late Bloomer', ageless:'⏳ Aging Gracefully', fizzle:'💨 Flash in the Pan' };
 
 // ============================================================
+// SORTABLE TABLE (reusable)
+// ============================================================
+// Call after innerHTML is set. Sorts by data-sort-value on <td> cells,
+// falls back to textContent. Click headers to sort; click again to reverse.
+function makeSortable(table) {
+  if (!table) return;
+  const heads = table.querySelectorAll('thead th');
+  let sortCol = -1, sortAsc = true;
+  heads.forEach((th, ci) => {
+    if (th.dataset.noSort !== undefined) return;
+    th.style.cursor = 'pointer';
+    th.style.userSelect = 'none';
+    th.addEventListener('click', () => {
+      if (sortCol === ci) sortAsc = !sortAsc; else { sortCol = ci; sortAsc = true; }
+      const tbody = table.querySelector('tbody');
+      const rows = [...tbody.querySelectorAll('tr')];
+      rows.sort((a, b) => {
+        const av = a.children[ci]?.dataset.sortValue ?? a.children[ci]?.textContent?.trim() ?? '';
+        const bv = b.children[ci]?.dataset.sortValue ?? b.children[ci]?.textContent?.trim() ?? '';
+        const an = parseFloat(av), bn = parseFloat(bv);
+        const cmp = (isNaN(an) || isNaN(bn)) ? av.localeCompare(bn) : an - bn;
+        return sortAsc ? cmp : -cmp;
+      });
+      rows.forEach(r => tbody.appendChild(r));
+      heads.forEach(h => h.classList.remove('text-accent'));
+      th.classList.add('text-accent');
+    });
+  });
+}
+
+// ============================================================
 // CHARTS (Chart.js, dark-themed)
 // ============================================================
 const CHARTS = {};
@@ -1448,8 +1479,29 @@ async function renderGame(m) {
         </div>
         <p class="text-xs text-faint mt-3">Opponents follow a standard NBA-style schedule — they're assigned, not chosen.</p>
       </div>` : ''}
+      <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">📅 ${t('Season')} ${S.season?.current_season||1} ${t('Progress')}</h3>
+        <div id="g-season-bar" class="mb-2"></div>
+        <div class="bar-track h-2"><div class="bar-fill" style="width:${Math.min(100,(gamesDone/82)*100)}%;background:linear-gradient(90deg,#f59e0b,#fbbf24)"></div></div>
+        <p class="text-[10px] text-faint mt-1" id="g-progress">Team Record: <b class="text-white">${ss?.team_wins||0}-${ss?.team_losses||0}</b> · ${gamesDone}/82 games played</p>
+      </div>
       <div id="g-result"></div>
     </div>`;
+
+  // Render the 82-game color bar (green=win, red=loss, gray=not played).
+  try {
+    const logs = await api(`/game/logs/${S.playerId}?season=${S.season?.current_season||1}&limit=82`);
+    const byNum = {};
+    (logs.games||[]).forEach(g => byNum[g.game_number] = g.result);
+    const bar = $('#g-season-bar');
+    if (bar) {
+      bar.innerHTML = `<div style="display:flex;gap:1px;flex-wrap:wrap">${Array.from({length:82}, (_,i) => {
+        const r = byNum[i+1];
+        const bg = r === 'W' ? '#34d399' : r === 'L' ? '#f87171' : '#232336';
+        return `<div style="width:8px;height:8px;border-radius:2px;background:${bg}" title="Game ${i+1}${r ? ': '+r : ''}"></div>`;
+      }).join('')}</div>`;
+    }
+  } catch(e) {}
 
   $('#g-sim').onclick = () => simGame($('#g-sim'));
   $('#g-batch5').onclick = (e) => simBatch(5, e.currentTarget);
@@ -2349,6 +2401,8 @@ function renderCareerChart(seasons) {
     { label: 'PPG', data: seasons.map(s => s.ppg), borderColor: '#f59e0b', backgroundColor: '#f59e0b', tension: 0.3, pointRadius: 3 },
     { label: 'RPG', data: seasons.map(s => s.rpg), borderColor: '#06b6d4', backgroundColor: '#06b6d4', tension: 0.3, pointRadius: 3 },
     { label: 'APG', data: seasons.map(s => s.apg), borderColor: '#a78bfa', backgroundColor: '#a78bfa', tension: 0.3, pointRadius: 3 },
+    { label: 'PER', data: seasons.map(s => s.per), borderColor: '#34d399', backgroundColor: '#34d399', tension: 0.3, pointRadius: 3, borderDash: [5, 3] },
+    { label: 'WS', data: seasons.map(s => s.ws), borderColor: '#f87171', backgroundColor: '#f87171', tension: 0.3, pointRadius: 3, borderDash: [5, 3] },
   ]);
 }
 
@@ -2820,14 +2874,16 @@ async function renderLeague(m) {
     const s = await api(`/league/standings${S.playerId ? `?player_id=${S.playerId}` : ''}`);
     const conf = (title, teams) => `
       <h4 class="text-xs font-semibold text-muted mt-3 mb-1">${title}</h4>
-      <div class="overflow-x-auto"><table class="w-full text-xs"><thead><tr class="text-muted border-b border-bg-border text-left">
-        <th class="py-1 pr-2">#</th><th class="pr-2">Team</th><th class="pr-2 text-center">W</th><th class="pr-2 text-center">L</th><th class="pr-2 text-center">OVR</th></tr></thead>
+      <div class="overflow-x-auto"><table class="w-full text-xs sortable-table"><thead><tr class="text-muted border-b border-bg-border text-left">
+        <th class="py-1 pr-2">#</th><th class="pr-2">Team</th><th class="pr-2 text-center">W</th><th class="pr-2 text-center">L</th><th class="pr-2 text-center">Win%</th><th class="pr-2 text-center">OVR</th></tr></thead>
       <tbody>${teams.map((t,i)=>`<tr class="border-b border-bg-border hover:bg-bg-hover ${t.team_id===S.player?.team_id?'bg-accent/5':''}">
         <td class="py-1 pr-2 text-faint">${i+1}</td><td class="pr-2 font-semibold ${t.team_id===S.player?.team_id?'text-accent':'text-white'}">${t.name} ${t.team_id===S.player?.team_id?'⭐':''}</td>
-        <td class="pr-2 text-center">${t.wins}</td><td class="pr-2 text-center">${t.losses}</td>
-        <td class="text-center"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${t.overall>=90?'bg-purple-400/10 text-purple-400':t.overall>=80?'bg-cyber/10 text-cyber':t.overall>=70?'bg-gray-400/10 text-gray-400':'bg-bad/10 text-bad'}">${t.overall}</span></td>
+        <td class="pr-2 text-center" data-sort-value="${t.wins}">${t.wins}</td><td class="pr-2 text-center" data-sort-value="${t.losses}">${t.losses}</td>
+        <td class="pr-2 text-center mono" data-sort-value="${((t.wins+t.losses)>0?(t.wins/(t.wins+t.losses)):0).toFixed(3)}">${((t.wins+t.losses)>0?(t.wins/(t.wins+t.losses)):0).toFixed(3)}</td>
+        <td class="text-center" data-sort-value="${t.overall}"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${t.overall>=90?'bg-purple-400/10 text-purple-400':t.overall>=80?'bg-cyber/10 text-cyber':t.overall>=70?'bg-gray-400/10 text-gray-400':'bg-bad/10 text-bad'}">${t.overall}</span></td>
       </tr>`).join('')}</tbody></table></div>`;
     $('#lg-stand').innerHTML = conf('EASTERN CONFERENCE', s.east) + conf('WESTERN CONFERENCE', s.west);
+    $('#lg-stand').querySelectorAll('.sortable-table').forEach(t => makeSortable(t));
   } catch(e) { $('#lg-stand').innerHTML = '<p class="text-bad">Failed to load standings</p>'; }
   loadLeaguePlayers();
   loadLeagueMoves();
@@ -2879,9 +2935,9 @@ async function loadLeaguePlayers() {
     const r = await api(`/league/players?player_id=${S.playerId}&limit=30`);
     const rows = r.players || [];
     $('#lg-players').innerHTML = rows.length ? `
-      <div class="overflow-x-auto"><table class="w-full text-xs">
+      <div class="overflow-x-auto"><table class="w-full text-xs sortable-table">
         <thead><tr class="text-muted border-b border-bg-border text-left">
-          <th class="py-1.5 pr-2">#</th><th class="pr-2">Player</th><th class="pr-2">Pos</th><th class="pr-2">Team</th><th class="pr-2 text-center">Age</th><th class="pr-2 text-center">OVR</th><th class="pr-2 text-center">Pot</th><th class="text-center">Sal</th>
+          <th class="py-1.5 pr-2" data-no-sort>#</th><th class="pr-2" data-no-sort>Player</th><th class="pr-2" data-no-sort>Pos</th><th class="pr-2" data-no-sort>Team</th><th class="pr-2 text-center">Age</th><th class="pr-2 text-center">OVR</th><th class="pr-2 text-center">Pot</th><th class="text-center">Sal</th>
         </tr></thead>
         <tbody>${rows.map((p,i)=>`
           <tr class="border-b border-bg-border">
@@ -2889,12 +2945,13 @@ async function loadLeaguePlayers() {
             <td class="pr-2 text-white font-semibold">${esc(p.name)}${p.injury_games>0?` <span class="text-bad" title="Out ${p.injury_games} games">🏥</span>`:''}${p.rest_games>0?` <span class="text-warn" title="Resting">😴</span>`:''}</td>
             <td class="pr-2 text-muted">${p.position}</td>
             <td class="pr-2 text-muted">${p.team_abbr}</td>
-            <td class="pr-2 text-center text-muted">${p.age}</td>
-            <td class="pr-2 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${p.overall>=90?'bg-purple-400/10 text-purple-400':p.overall>=80?'bg-cyber/10 text-cyber':p.overall>=70?'bg-gray-400/10 text-gray-400':'bg-bad/10 text-bad'}">${p.overall}</span></td>
-            <td class="pr-2 text-center text-faint">${p.potential}</td>
-            <td class="text-center text-muted mono">$${(p.salary||0).toFixed(1)}M</td>
+            <td class="pr-2 text-center text-muted" data-sort-value="${p.age}">${p.age}</td>
+            <td class="pr-2 text-center" data-sort-value="${p.overall}"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${p.overall>=90?'bg-purple-400/10 text-purple-400':p.overall>=80?'bg-cyber/10 text-cyber':p.overall>=70?'bg-gray-400/10 text-gray-400':'bg-bad/10 text-bad'}">${p.overall}</span></td>
+            <td class="pr-2 text-center text-faint" data-sort-value="${p.potential}">${p.potential}</td>
+            <td class="text-center text-muted mono" data-sort-value="${(p.salary||0).toFixed(1)}">$${(p.salary||0).toFixed(1)}M</td>
           </tr>`).join('')}</tbody>
       </table></div>` : '<p class="text-muted text-sm">No players yet.</p>';
+    if (rows.length) $('#lg-players').querySelectorAll('.sortable-table').forEach(t => makeSortable(t));
   } catch(e) { $('#lg-players').innerHTML = '<p class="text-muted text-sm">Couldn\'t load players.</p>'; }
 }
 
