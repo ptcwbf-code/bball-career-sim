@@ -295,8 +295,8 @@ const BACKGROUNDS = {
 
 // Attributes that can be developed mid-season (training focus + auto development).
 const DEVELOPABLE_ATTRS = [
-  'mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'finishing', 'first_step', 'free_throw',
-  'ball_security', 'pnr_vision', 'passing_accuracy', 'perimeter_defense', 'help_defense', 'steal',
+  'mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'finishing', 'first_step', 'free_throw', 'drawing_fouls', 'off_ball',
+  'ball_security', 'pnr_vision', 'passing_accuracy', 'perimeter_defense', 'help_defense', 'steal', 'rim_protection',
   'box_out', 'rebounding', 'vertical_jump', 'speed', 'lateral_quickness', 'strength', 'stamina', 'bbiq', 'composure',
 ];
 
@@ -851,13 +851,14 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
     box.fga = Math.max(1, Math.floor(minutes * usageRate * 0.35));
     box.fgm = Math.max(0, Math.floor(box.fga * 0.3));
   }
-  // Stabilize team totals toward rating-implied expectation to tame blowouts
-  // (each possession is otherwise an independent, high-variance coin flip).
+  // Stabilize team totals toward rating-implied expectation to tame blowouts,
+  // but leave enough variance that a slightly better team doesn't win 70+ games.
+  // Each expected score also gets gaussian noise so there's real game-to-game swing.
   const expTeam = clamp(team.off + (team.off - opp.def) * 0.4 + (home ? 2.5 : 0), 85, 135);
   const expOpp = clamp(opp.off + (opp.off - team.def) * 0.4 + (home ? -2.5 : 0), 85, 135);
-  const STAB = 0.55;
-  teamScore = Math.round(teamScore * (1 - STAB) + expTeam * STAB);
-  oppScore = Math.round(oppScore * (1 - STAB) + expOpp * STAB);
+  const STAB = 0.30;
+  teamScore = Math.round(teamScore * (1 - STAB) + (expTeam + gauss(0, 5)) * STAB);
+  oppScore = Math.round(oppScore * (1 - STAB) + (expOpp + gauss(0, 5)) * STAB);
   const tRaw = qT.reduce((a, b) => a + b, 0) || 1;
   const oRaw = qO.reduce((a, b) => a + b, 0) || 1;
   for (let i = 0; i < 3; i++) { qT[i] = Math.round(qT[i] / tRaw * teamScore); qO[i] = Math.round(qO[i] / oRaw * oppScore); }
@@ -1482,10 +1483,15 @@ function aiDefSpec(seedStr, power) {
 function aiPerGameStats(overall, id) {
   const stealSpec = aiDefSpec(`steal:${id}`, 3);
   const blockSpec = aiDefSpec(`block:${id}`, 24);
+  // Per-player noise: each AI player has a stable "style" that makes their
+  // stats deviate from the overall-based baseline. Without this, all 90-OVR
+  // players have identical 25/8/7 lines — completely unrealistic.
+  const rng = mulberry32(hashSalt(`stats:${id}`));
+  const gaussLocal = () => { let u=0,v=0; while(!u) u=rng(); while(!v) v=rng(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); };
   return {
-    ppg: round1(clamp(overall * 0.32 - 4, 4, 32)),
-    rpg: round1(clamp(overall * 0.12 - 2, 1, 12)),
-    apg: round1(clamp(overall * 0.11 - 2, 1, 10)),
+    ppg: round1(clamp(overall * 0.32 - 4 + gaussLocal() * 2.5, 4, 32)),
+    rpg: round1(clamp(overall * 0.12 - 2 + gaussLocal() * 1.0, 1, 14)),
+    apg: round1(clamp(overall * 0.11 - 2 + gaussLocal() * 1.2, 1, 12)),
     spg: round1(clamp(overall * 0.006 + stealSpec * 1.9, 0.3, 2.6)),
     bpg: round1(clamp(overall * 0.004 + blockSpec * 2.9, 0.2, 3.6)),
   };
@@ -2840,6 +2846,63 @@ function finalizeSeason(playerId) {
 
   const end = endSeasonToOffseason(playerId, 'Missed Playoffs');
   return { ...base, qualified: false, playoff_result: 'Missed Playoffs', age_changes: end.age_changes, year_settlement: end.year_settlement, retirement: end.retirement };
+}
+
+// Simulate first half only (Q1+Q2) for halftime display.
+// Returns partial game state — no DB writes, no side effects.
+function simulateFirstHalf(playerId, opponentTeamId, isPlayoff, isHome) {
+  const player = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  const oppLive = teamOffDef(playerId, opponentTeamId);
+  const teamLive = teamOffDef(playerId, player.team_id);
+  const opp = { ...(TEAMS[opponentTeamId] || TEAMS[1]), off: oppLive.off, def: oppLive.def };
+  const team = { ...(TEAMS[player.team_id] || TEAMS[1]), off: teamLive.off, def: teamLive.def };
+  const lifeBuffs = lifeBondBuffs(playerId);
+  player.clutch_factor = clamp((player.clutch_factor || 50) + lifeBuffs.clutch, 1, 99);
+  player.composure = clamp((player.composure || 50) + lifeBuffs.composure, 1, 99);
+  const locker = getLockerRoomBonds(playerId);
+  player._avgBond = locker.avg;
+  player._connection = clamp(1 + (locker.top - 50) / 300 + (locker.avg - 50) / 600, 0.85, 1.3);
+  const overall = calculateOverallRating(player);
+  const tactics = tacticModifiers(player);
+  const teamOff = team.off + (isHome ? 2.5 : 0), oppDef = opp.def;
+  const oppOff = opp.off - (isHome ? 2.5 : 0), teamDef = team.def;
+  const totalPoss = clamp(randInt(195, 210) + tactics.poss, 150, 240);
+  const halfPoss = Math.floor(totalPoss / 2);
+  const roleUsage = { 'Ball-Dominant Creator': 0.33, 'Off-Ball Finisher': 0.21, 'Rim Protector': 0.14, 'Two-Way Wing': 0.25, '3-and-D Specialist': 0.17, 'Point Forward': 0.28, 'Stretch Big': 0.19, 'Defensive Anchor': 0.12 };
+  let usageRate = roleUsage[player.role] ?? 0.24;
+  usageRate *= clamp(0.5 + (overall - 40) / 70.0, 0.5, 1.3);
+  const courtPct = 0.85;
+  const box = { pts: 0, oreb: 0, dreb: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, fta: 0, ftm: 0, fga_mid: 0 };
+  let teamScore = 0, oppScore = 0;
+  const TOV_RATE = 0.12 * tactics.myTov;
+  const moraleMod = clamp(1 + ((player.morale ?? 75) - 75) / 400, 0.94, 1.06);
+  for (let posNum = 1; posNum <= halfPoss; posNum++) {
+    const myPossession = Math.random() < 0.50;
+    const playerOn = Math.random() < courtPct;
+    if (myPossession) {
+      const defFactor = 1 + (oppDef - 110) / 220.0;
+      const effChem = clamp((player._avgBond ?? 50) * 0.7 + (player.leadership || 40) * 0.3, 0, 100);
+      const chemMod = 1 + (effChem - 50) / 250.0;
+      const baseProb = teamOff / 155.0 * defFactor * 0.68 * chemMod * moraleMod;
+      const playerInvolved = playerOn && Math.random() < usageRate * 1.25;
+      if (Math.random() < TOV_RATE) { /* turnover */ }
+      else if (playerInvolved) {
+        const action = determineAction(player, false, 0);
+        const r = resolveAction(player, action, opp, false, 0, moraleMod);
+        box.fgm += r.fgm; box.fga += r.fga; box.tpa += r.tpa; box.tpm += r.tpm;
+        box.fta += r.fta; box.ftm += r.ftm; box.tov += r.tov;
+        box.pts += r.points; box.ast += r.assist;
+      }
+    } else {
+      const defFactor = 1 + (teamDef - 110) / 220.0;
+      const oppProb = oppOff / 155.0 * defFactor * 0.68 * tactics.oppScore;
+      if (Math.random() < TOV_RATE) { /* opp turnover */ }
+      else if (Math.random() < oppProb) oppScore += (Math.random() < 0.28 * tactics.oppThree) ? 3 : 2;
+    }
+  }
+  return { player_pts: box.pts, player_reb: box.reb, player_ast: box.ast,
+           team_score: teamScore, opp_score: oppScore, team_off: round1(team.off), opp_off: round1(opp.off),
+           half: 'Q1+Q2', total_poss: totalPoss };
 }
 
 function simulatePlayoffGame(playerId, halftimeMods = null) {
@@ -4506,6 +4569,19 @@ app.get('/api/game/logs/:id', wrap((req) => {
 app.get('/api/season/state', wrap((req) => getLeagueState(req.query.player_id)));
 app.post('/api/season/advance-phase', wrap((req) => { advanceLeaguePhase(req.query.player_id); return getLeagueState(req.query.player_id); }));
 app.post('/api/season/finalize/:id', wrap((req) => finalizeSeason(req.params.id)));
+// First half simulation for halftime display (no DB writes).
+app.get('/api/playoff/first-half/:id', wrap((req) => {
+  const state = getLeagueState(req.params.id);
+  if (state.current_phase !== 'playoffs') throw httpError(400, 'No active playoff series.');
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  const oppId = state.playoff_opponent;
+  const gameInSeries = state.series_wins + state.series_losses + 1;
+  const higherIsHome = [1, 2, 5, 7].includes(gameInSeries);
+  const playerIsHigher = (state.player_seed || 9) < (state.opponent_seed || 9);
+  const isHome = higherIsHome ? playerIsHigher : !playerIsHigher;
+  return simulateFirstHalf(req.params.id, oppId, true, isHome);
+}));
+
 app.post('/api/season/playoff-game/:id', wrap((req) => {
   const mods = req.query.halftime ? JSON.parse(decodeURIComponent(req.query.halftime)) : null;
   return simulatePlayoffGame(req.params.id, mods);

@@ -1061,7 +1061,7 @@ function emptyState(title, sub) {
 async function renderAttributes(m) {
   let a; try { a = await api(`/player/${S.playerId}/attributes`); } catch(e){ return m.innerHTML='<p class="text-bad">Error</p>'; }
   const tier = v => v>=90?'#fbbf24':v>=80?'#c084fc':v>=70?'#22d3ee':v>=55?'#4ade80':v>=40?'#8b8ba3':'#f87171';
-  const DEVELOPABLE = new Set(['mid_range','catch_shoot_3pt','pull_up_3pt','finishing','first_step','free_throw','ball_security','pnr_vision','passing_accuracy','perimeter_defense','help_defense','steal','box_out','rebounding','vertical_jump','speed','lateral_quickness','strength','stamina','bbiq','composure']);
+  const DEVELOPABLE = new Set(['mid_range','catch_shoot_3pt','pull_up_3pt','finishing','first_step','free_throw','drawing_fouls','off_ball','ball_security','pnr_vision','passing_accuracy','perimeter_defense','help_defense','steal','rim_protection','box_out','rebounding','vertical_jump','speed','lateral_quickness','strength','stamina','bbiq','composure']);
   const isSandbox = S.season?.game_mode === 'sandbox';
   const group = (title, note, obj) => `
     <div class="card p-5">
@@ -2224,9 +2224,41 @@ function showPauseModal(paused) {
 
 function resolvePause(type) {
   document.getElementById('pause-modal')?.remove();
-  if (type === 'life') switchTab('offcourt');
-  else if (type === 'media') openNotableMedia();
-  else openDecisions();
+  if (type === 'media') { openNotableMedia(); return; }
+  if (type === 'life') { openLifeEventInline(); return; }
+  openDecisions();
+}
+
+// Show a life event popup directly in the simulation flow — no page navigation.
+async function openLifeEventInline() {
+  const overlay = document.createElement('div');
+  overlay.id = 'life-inline-modal';
+  overlay.className = 'fixed inset-0 z-[75] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4';
+  try {
+    const r = await api(`/life/overview/${S.playerId}`);
+    const ev = (r.events || [])[0];
+    if (!ev) { toast('No pending life events.', 'info'); return; }
+    const lang = S.season?.lang || 'en';
+    overlay.innerHTML = `<div class="card p-5 w-full max-w-md max-h-[80vh] flex flex-col">
+      <h3 class="text-lg font-bold text-white mb-1">👥 ${ev.intro ? 'New Connection' : (ev.name || 'Life Event')}</h3>
+      <p class="text-sm text-gray-200 mb-4">"${esc(pick(ev.event.question, lang))}"</p>
+      <div class="space-y-2 flex-1 overflow-y-auto">
+        ${ev.event.choices.map((c, i) => `<button class="w-full text-left card card-hover p-3 text-sm" data-idx="${i}">${esc(pick(c.text, lang))}</button>`).join('')}
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.onclick = async () => {
+        const idx = parseInt(btn.dataset.idx);
+        try {
+          await api(`/life/respond/${S.playerId}?event_id=${encodeURIComponent(ev.event.id)}&choice_index=${idx}${ev.relationship_id != null ? '&relationship_id=' + ev.relationship_id : ''}`, { method: 'POST' });
+          overlay.remove();
+          toast('Your choice has been made.', 'success');
+          await refreshPlayer(); renderHeader();
+        } catch(e) { toast('Failed: ' + e.message, 'error'); }
+      };
+    });
+  } catch(e) { overlay.innerHTML = `<div class="card p-5"><p class="text-bad">${e.message}</p></div>`; document.body.appendChild(overlay); }
 }
 
 async function openNotableMedia() {
@@ -2518,7 +2550,10 @@ async function simPlayoffGame(btn) {
 }
 
 function showHalftimeModal() {
-  return new Promise(resolve => {
+  return new Promise(async (resolve) => {
+    // Fetch first-half stats to show in the modal.
+    let half = null;
+    try { half = await api(`/playoff/first-half/${S.playerId}`); } catch(e) {}
     const overlay = document.createElement('div');
     overlay.id = 'halftime-modal';
     overlay.className = 'fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
@@ -2528,23 +2563,37 @@ function showHalftimeModal() {
       { id: 'three_push', label: '🎯 Shoot More Threes', desc: 'Tell the team to hunt threes — 3pt attempts ×1.3.' },
       { id: 'slow_down', label: '⏳ Slow It Down', desc: 'Control the tempo — fewer possessions, fewer turnovers.' },
     ];
+    const statsHtml = half ? `
+      <div class="flex justify-center gap-8 mb-4 text-sm">
+        <div class="text-center"><div class="text-2xl font-black text-accent">${S.player.team_abbr||'YOU'}</div><div class="text-xs text-faint">est. ${half.team_score}</div></div>
+        <span class="text-muted text-xl self-center">—</span>
+        <div class="text-center"><div class="text-2xl font-black text-white">OPP</div><div class="text-xs text-faint">est. ${half.opp_score}</div></div>
+      </div>
+      <div class="flex justify-center gap-6 mb-4 text-xs text-muted">
+        <span>PTS <b class="text-accent">${half.player_pts}</b></span>
+        <span>REB <b class="text-cyber">${half.player_reb}</b></span>
+        <span>AST <b class="text-purple-400">${half.player_ast}</b></span>
+      </div>` : '';
     overlay.innerHTML = `<div class="card p-5 w-full max-w-md">
       <h3 class="text-lg font-bold text-white mb-1">🏀 Halftime</h3>
       <p class="text-xs text-muted mb-3">Your coach is asking: how should we adjust the second half?</p>
-      <div class="space-y-2">
-        ${opts.map(o => `<button class="w-full text-left card card-hover p-3" onclick="document.getElementById('halftime-modal').remove();window._halftimeResolve(${JSON.stringify(o.id)})">
-          <p class="text-sm text-white font-semibold">${o.label}</p>
-          <p class="text-xs text-muted">${o.desc}</p>
-        </button>`).join('')}
-      </div>
-      <button class="btn-secondary w-full mt-2" onclick="document.getElementById('halftime-modal').remove();window._halftimeResolve(null)">No change — play it out</button>
+      ${statsHtml}
+      <div class="space-y-2" id="halftime-opts"></div>
     </div>`;
     document.body.appendChild(overlay);
-    window._halftimeResolve = (choice) => {
-      const mods = {};
-      if (choice) mods[choice] = true;
-      resolve(choice ? mods : null);
-    };
+    const optsEl = overlay.querySelector('#halftime-opts');
+    opts.forEach(o => {
+      const btn = document.createElement('button');
+      btn.className = 'w-full text-left card card-hover p-3';
+      btn.innerHTML = `<p class="text-sm text-white font-semibold">${o.label}</p><p class="text-xs text-muted">${o.desc}</p>`;
+      btn.onclick = () => { overlay.remove(); resolve({ [o.id]: true }); };
+      optsEl.appendChild(btn);
+    });
+    const noChange = document.createElement('button');
+    noChange.className = 'btn-secondary w-full mt-2';
+    noChange.textContent = 'No change — play it out';
+    noChange.onclick = () => { overlay.remove(); resolve(null); };
+    optsEl.parentElement.appendChild(noChange);
   });
 }
 
