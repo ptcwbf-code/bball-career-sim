@@ -4132,6 +4132,24 @@ app.get('/api/draft/point-pool', wrap((req) => {
   return calculatePointPool(position, parseFloat(height), parseFloat(weight));
 }));
 app.post('/api/draft/simulate/:id', wrap((req) => simulateDraft(req.params.id)));
+
+// Draft scouting preview: generate a draft class and show where the player
+// projects, so they can see the competition before entering the draft.
+app.get('/api/draft/preview/:id', wrap((req) => {
+  const player = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!player) throw httpError(404, 'Player not found');
+  const overall = calculateOverallRating(player);
+  const draftClass = generateDraftClass();
+  const allProspects = draftClass.map(p => ({ ...p })).concat([
+    { name: player.name, position: player.position, overall, potential: player.potential ?? 50, is_player: true },
+  ]);
+  allProspects.sort((a, b) => b.overall - a.overall);
+  const projection = allProspects.findIndex(p => p.is_player) + 1;
+  const top10 = allProspects.slice(0, 10).map((p, i) => ({
+    rank: i + 1, name: p.name, position: p.position, overall: p.overall, potential: p.potential, is_player: !!p.is_player,
+  }));
+  return { top10, projection, player_overall: overall };
+}));
 app.get('/api/draft/estimate', wrap((req) => {
   const position = req.query.position;
   let allocations = {};
@@ -4338,6 +4356,87 @@ app.get('/api/league/team/:teamId', wrap((req) => teamRoster(req.query.player_id
 app.get('/api/league/moves/:id', wrap((req) => ({ moves: db.prepare("SELECT season_number, description FROM career_progress WHERE player_id=? AND event_type='league' ORDER BY id DESC LIMIT ?").all(req.params.id, Math.min(Number(req.query.limit) || 15, 50)) })));
 app.get('/api/league/mvp-race/:id', wrap((req) => ({ race: mvpRace(req.params.id) })));
 app.get('/api/league/leaders/:id', wrap((req) => statLeaders(req.params.id)));
+
+// Playoff bracket: simulate all 4 rounds based on team strength. The player's
+// actual series (tracked in league_state) overrides the simulation.
+function simulateBracket(playerId) {
+  const state = getLeagueState(playerId);
+  const standings = getConferenceStandings(playerId);
+  const season = state.current_season;
+  const playerTeamId = db.prepare('SELECT team_id FROM players WHERE id=?').get(playerId)?.team_id;
+
+  function simSeries(teamA, teamB) {
+    if (teamA === playerTeamId || teamB === playerTeamId) {
+      if (teamA === playerTeamId || teamB === playerTeamId) {
+        const isPlayerA = teamA === playerTeamId;
+        const opponent = isPlayerA ? teamB : teamA;
+        if (state.playoff_opponent === opponent) {
+          return { wins: state.series_wins, losses: state.series_losses, winner: state.series_wins >= 4 ? teamA : state.series_losses >= 4 ? teamB : null };
+        }
+      }
+      // Player's team but not current series — simulate by strength
+    }
+    const a = teamStrength(playerId, teamA);
+    const b = teamStrength(playerId, teamB);
+    let aw = 0, bw = 0;
+    for (let i = 0; i < 7 && aw < 4 && bw < 4; i++) {
+      if (Math.random() < a / (a + b)) aw++; else bw++;
+    }
+    return { wins: aw, losses: bw, winner: aw >= 4 ? teamA : teamB };
+  }
+
+  function buildBracket(conf) {
+    const seeds = conferenceSeeds(standings, conf);
+    const r1 = [];
+    for (let i = 0; i < 4; i++) {
+      const home = seeds[i], away = seeds[7 - i];
+      if (!home || !away) continue;
+      const s = simSeries(home.team_id, away.team_id);
+      r1.push({ home: home.team_id, away: away.team_id, ...s, round: 1 });
+    }
+    const r2 = [];
+    for (let i = 0; i < r1.length; i += 2) {
+      const a = r1[i]?.winner, b = r1[i + 1]?.winner;
+      if (!a || !b) continue;
+      const s = simSeries(a, b);
+      r2.push({ home: a, away: b, ...s, round: 2 });
+    }
+    const r3 = [];
+    if (r2.length >= 2) {
+      const a = r2[0]?.winner, b = r2[1]?.winner;
+      if (a && b) { const s = simSeries(a, b); r3.push({ home: a, away: b, ...s, round: 3 }); }
+    }
+    const confChamp = r3[0]?.winner || null;
+    return { conf, seeds, round1: r1, round2: r2, round3: r3, champ: confChamp };
+  }
+
+  const eastBracket = buildBracket('East');
+  const westBracket = buildBracket('West');
+  // Finals
+  let finals = null;
+  if (eastBracket.champ && westBracket.champ) {
+    const s = simSeries(eastBracket.champ, westBracket.champ);
+    finals = { home: eastBracket.champ, away: westBracket.champ, ...s, round: 4 };
+  }
+  return { east: eastBracket, west: westBracket, finals, player_seed: state.player_seed };
+}
+
+app.get('/api/playoff/bracket/:id', wrap((req) => simulateBracket(req.params.id)));
+
+// League history: aggregate awards by season (champion, MVP, All-NBA, etc.)
+app.get('/api/league/history/:id', wrap((req) => {
+  const seasons = db.prepare('SELECT DISTINCT season_number FROM awards WHERE player_id=? ORDER BY season_number DESC').all(req.params.id);
+  const history = seasons.map(s => {
+    const awards = db.prepare('SELECT award_name FROM awards WHERE player_id=? AND season_number=?').all(req.params.id, s.season_number);
+    const champion = awards.find(a => a.award_name === 'NBA Champion') ? true : false;
+    const mvp = awards.find(a => a.award_name === 'MVP') ? true : false;
+    const allNba = awards.filter(a => a.award_name?.includes('All-NBA')).map(a => a.award_name);
+    const allDef = awards.filter(a => a.award_name?.includes('All-Defensive')).map(a => a.award_name);
+    return { season: s.season_number, champion, mvp, allNba, allDef, allAwards: awards.map(a => a.award_name) };
+  });
+  return { history };
+}));
+
 app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
 
 // Static frontend

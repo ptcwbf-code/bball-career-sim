@@ -601,8 +601,7 @@ function renderDraftNight(m) {
       <button class="btn-primary" id="draft-start">Enter the Draft</button>
     </div>`;
   $('#draft-start').onclick = async () => {
-    $('#draft-panel').innerHTML = `<div class="py-10 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-muted">Simulating draft combine & lottery…</p></div>`;
-    // Create player
+    $('#draft-panel').innerHTML = `<div class="py-10 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-muted">Creating your player…</p></div>`;
     try {
       const res = await api('/player/create', { method:'POST', body: JSON.stringify({
         name:S.create.name, position:S.create.position, age:S.create.age,
@@ -613,12 +612,39 @@ function renderDraftNight(m) {
       })});
       S.playerId = res.player_id; S.player = res.player; localStorage.setItem('bball_pid', res.player_id);
       await refreshSeason();
-      // Run draft
-      const draft = await api(`/draft/simulate/${S.playerId}`, { method:'POST' });
-      resetCreate(); // the wizard is done — "New Game" should start a fresh save next time
-      showDraftResult(draft);
+      // Show scouting report before the actual draft
+      const preview = await api(`/draft/preview/${S.playerId}`);
+      const top = preview.top10 || [];
+      $('#draft-panel').innerHTML = `
+        <div class="text-5xl mb-3">📋</div>
+        <h2 class="text-xl font-bold text-white mb-1">Draft Scouting Report</h2>
+        <p class="text-muted mb-4">Your projected pick: <b class="text-accent">#${preview.projection}</b> · Your combine grade: <b class="text-accent">${preview.player_overall}</b></p>
+        <div class="overflow-x-auto mb-4"><table class="w-full text-xs">
+          <thead><tr class="text-muted border-b border-bg-border text-left">
+            <th class="py-1.5 pr-2">#</th><th class="pr-2">Name</th><th class="pr-2">Pos</th><th class="pr-2 text-center">OVR</th><th class="pr-2 text-center">Pot</th>
+          </tr></thead>
+          <tbody>${top.map(p => `<tr class="border-b border-bg-border ${p.is_player ? 'bg-accent/10 ring-1 ring-accent/30' : ''}">
+            <td class="py-1 pr-2 ${p.is_player?'text-accent font-bold':'text-faint'}">${p.rank}</td>
+            <td class="pr-2 ${p.is_player?'text-accent font-bold':'text-white'}">${esc(p.name)}${p.is_player?' ⭐':''}</td>
+            <td class="pr-2 text-muted">${p.position}</td>
+            <td class="pr-2 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${p.overall>=80?'bg-cyber/10 text-cyber':p.overall>=70?'bg-gray-400/10 text-gray-400':'bg-bad/10 text-bad'}">${p.overall}</span></td>
+            <td class="pr-2 text-center text-faint">${p.potential}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <p class="text-xs text-faint mb-4">The draft order is determined by the lottery. You can't choose your team — but you can see where you stand.</p>
+        <button class="btn-primary" id="draft-run">🎟️ Simulate Draft Night</button>`;
+      $('#draft-run').onclick = () => runDraft();
     } catch(e) { toast('Draft failed: '+e.message,'error'); renderCreate($('#main')); }
   };
+}
+
+async function runDraft() {
+  $('#draft-panel').innerHTML = `<div class="py-10 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-muted">Simulating draft lottery…</p></div>`;
+  try {
+    const draft = await api(`/draft/simulate/${S.playerId}`, { method:'POST' });
+    resetCreate();
+    showDraftResult(draft);
+  } catch(e) { toast('Draft failed: '+e.message,'error'); renderCreate($('#main')); }
 }
 
 function ord(n) { const s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
@@ -1390,10 +1416,15 @@ async function renderGame(m) {
           <p class="text-xs text-faint mb-3">Their current strength and key players — this changes as the league evolves.</p>
           <div id="g-scout">Loading…</div>
         </div>
+        <div class="card p-5">
+          <h3 class="text-sm font-semibold text-gray-300 mb-1">📊 Playoff Bracket</h3>
+          <div id="g-bracket" class="overflow-x-auto"><p class="text-muted text-sm">Loading bracket…</p></div>
+        </div>
         <div id="g-result"></div>
       </div>`;
     $('#g-pg').onclick = () => simPlayoffGame($('#g-pg'));
     loadScoutingReport(st.playoff_opponent);
+    loadBracket();
     return;
   }
   if (seasonComplete) {
@@ -2017,6 +2048,61 @@ async function loadScoutingReport(teamId) {
       <p class="text-xs text-muted mb-1">Their key players: <span class="text-white">${top || '—'}</span></p>
       <p class="text-[10px] text-faint">${r.abbr} payroll $${r.salary?.toFixed(1)||'0'}M · your payroll $${mine.salary?.toFixed(1)||'0'}M (cap $${r.cap||'—'}M)</p>`;
   } catch(e) { el.innerHTML = '<p class="text-muted text-sm">Scouting report unavailable.</p>'; }
+}
+
+async function loadBracket() {
+  const el = $('#g-bracket'); if (!el) return;
+  try {
+    const r = await api(`/playoff/bracket/${S.playerId}`);
+    const tm = id => (S.teams?.[id]?.abbr || '?');
+    const tmFull = id => (S.teams?.[id]?.name || 'TBD');
+    const seed = (conf, id) => {
+      const idx = conf.findIndex(t => t.team_id === id);
+      return idx >= 0 ? (idx + 1) : '?';
+    };
+    const match = (m, conf) => {
+      if (!m) return '<div class="text-muted text-xs">TBD vs TBD</div>';
+      const isPlayer = m.home === S.player.team_id || m.away === S.player.team_id;
+      const homeWon = (m.winner === m.home);
+      return `<div class="card p-2 text-xs ${isPlayer ? 'ring-1 ring-accent' : ''}" style="min-width:110px">
+        <div class="flex justify-between ${homeWon ? 'font-bold text-white' : 'text-muted'}"><span>#${seed(conf, m.home)} ${tm(m.home)}</span><span>${m.wins}</span></div>
+        <div class="flex justify-between ${!homeWon ? 'font-bold text-white' : 'text-muted'}"><span>#${seed(conf, m.away)} ${tm(m.away)}</span><span>${m.losses}</span></div>
+      </div>`;
+    };
+    const round = (title, matches, conf) => `
+      <div class="flex flex-col gap-3 justify-center" style="min-width:130px">
+        <p class="text-[10px] text-muted text-center font-semibold">${title}</p>
+        ${matches.map(m => match(m, conf)).join('')}
+      </div>`;
+
+    const confBracket = (b) => `
+      <div class="mb-4">
+        <p class="text-xs font-semibold text-muted mb-2">${b.conf}ern Conference</p>
+        <div class="flex gap-3 items-center">
+          ${round('Round 1', b.round1, b.seeds)}
+          ${round('Conf Semis', b.round2, b.seeds)}
+          ${round('Conf Finals', b.round3, b.seeds)}
+          <div class="card p-2 text-xs" style="min-width:80px">
+            <p class="text-[10px] text-muted mb-1">Champ</p>
+            <div class="font-bold text-accent">${b.champ ? tmFull(b.champ) : 'TBD'}</div>
+          </div>
+        </div>
+      </div>`;
+
+    const finalsHtml = r.finals ? `
+      <div class="mt-2">
+        <p class="text-xs font-semibold text-muted mb-2">🏆 NBA Finals</p>
+        <div class="flex items-center gap-4">
+          <div class="font-bold text-white">${tmFull(r.finals.home)}</div>
+          <span class="text-muted">vs</span>
+          <div class="font-bold text-white">${tmFull(r.finals.away)}</div>
+          <span class="text-accent font-bold ml-2">${r.finals.wins}-${r.finals.losses}</span>
+          <span class="text-xs text-muted ml-1">(${r.finals.winner === r.finals.home ? tmFull(r.finals.home) : r.finals.winner === r.finals.away ? tmFull(r.finals.away) : 'In progress'})</span>
+        </div>
+      </div>` : '';
+
+    el.innerHTML = confBracket(r.east) + confBracket(r.west) + finalsHtml;
+  } catch(e) { el.innerHTML = '<p class="text-muted text-sm">Bracket unavailable.</p>'; }
 }
 
 function devEventNotice(r) {
@@ -2869,6 +2955,7 @@ async function renderLeague(m) {
       <div class="card p-5"><h3 class="text-sm font-semibold text-gray-300 mb-1">🏆 MVP Race</h3><p class="text-xs text-faint mb-3">How you stack up against the league's stars this season.</p><div id="lg-mvp">Loading…</div></div>
       <div class="card p-5"><h3 class="text-sm font-semibold text-gray-300 mb-1">📊 Stat Leaders</h3><p class="text-xs text-faint mb-3">Points / rebounds / assists / steals / blocks — your real numbers vs the league's stars.</p><div id="lg-leaders">Loading…</div></div>
       <div class="card p-5"><h3 class="text-sm font-semibold text-gray-300 mb-1">League Moves</h3><p class="text-xs text-faint mb-3">Trades and free-agent signings from the last offseason.</p><div id="lg-moves">Loading…</div></div>
+      <div class="card p-5"><h3 class="text-sm font-semibold text-gray-300 mb-1">📜 League History</h3><p class="text-xs text-faint mb-3">Your franchise's legacy — every championship, MVP, and honor.</p><div id="lg-history">Loading…</div></div>
     </div>`;
   try {
     const s = await api(`/league/standings${S.playerId ? `?player_id=${S.playerId}` : ''}`);
@@ -2887,6 +2974,7 @@ async function renderLeague(m) {
   } catch(e) { $('#lg-stand').innerHTML = '<p class="text-bad">Failed to load standings</p>'; }
   loadLeaguePlayers();
   loadLeagueMoves();
+  loadLeagueHistory();
   loadMvpRace();
   loadLeaders();
 }
@@ -2928,6 +3016,31 @@ async function loadLeagueMoves() {
         <span class="text-gray-200">${esc(m.description)}</span>
       </div>`).join('') : '<p class="text-muted text-sm">No league moves yet — they happen each offseason.</p>';
   } catch(e) { $('#lg-moves').innerHTML = '<p class="text-muted text-sm">Couldn\'t load moves.</p>'; }
+}
+
+async function loadLeagueHistory() {
+  const el = $('#lg-history'); if (!el) return;
+  try {
+    const r = await api(`/league/history/${S.playerId}`);
+    const h = r.history || [];
+    if (!h.length) { el.innerHTML = '<p class="text-muted text-sm">No history yet — complete a season to start building your legacy.</p>'; return; }
+    el.innerHTML = `<div class="overflow-x-auto"><table class="w-full text-xs sortable-table">
+      <thead><tr class="text-muted border-b border-bg-border text-left">
+        <th class="py-1.5 pr-2">Season</th><th class="pr-2 text-center">🏆</th><th class="pr-2 text-center">MVP</th><th class="pr-2">All-NBA</th><th class="pr-2">All-Def</th><th class="pr-2">Other</th>
+      </tr></thead>
+      <tbody>${h.map(s => {
+        const other = s.allAwards.filter(a => !a.includes('All-NBA') && !a.includes('All-Defensive') && a !== 'MVP' && a !== 'NBA Champion');
+        return `<tr class="border-b border-bg-border hover:bg-bg-hover">
+          <td class="py-1.5 pr-2 font-bold text-accent">S${s.season}</td>
+          <td class="pr-2 text-center">${s.champion ? '🏆' : '—'}</td>
+          <td class="pr-2 text-center">${s.mvp ? '⭐' : '—'}</td>
+          <td class="pr-2 text-muted">${s.allNba.join(', ') || '—'}</td>
+          <td class="pr-2 text-muted">${s.allDef.join(', ') || '—'}</td>
+          <td class="text-muted">${other.join(', ') || '—'}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>`;
+    el.querySelectorAll('.sortable-table').forEach(t => makeSortable(t));
+  } catch(e) { el.innerHTML = '<p class="text-muted text-sm">Couldn\'t load history.</p>'; }
 }
 
 async function loadLeaguePlayers() {
