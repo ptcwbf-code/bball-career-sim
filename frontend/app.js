@@ -833,7 +833,7 @@ async function renderDashboard(m) {
   const weekendCard = p.pending_weekend ? `
       <div class="card p-5 border-accent/40 bg-accent/5">
         <h3 class="text-sm font-semibold text-accent mb-1">🌟 All-Star Weekend</h3>
-        <p class="text-xs text-muted mb-3">The league invited you to the All-Star events. What do you enter?</p>
+        <p class="text-xs text-muted mb-3">The league invited you to the All-Star events. Eligibility: dunk (vert≥55 or finishing≥50 or clout≥70), 3pt (catch_shoot≥50 or clout≥70).</p>
         <div class="flex gap-2 flex-wrap">
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="resolveWeekend('dunk')">🛫 Dunk Contest</button>
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="resolveWeekend('three')">🎯 Three-Point Contest</button>
@@ -1324,90 +1324,170 @@ async function resolveRetire(choice) {
 
 async function resolveWeekend(choice) {
   if (choice === 'skip') {
-    const r = await api(`/season/allstar-weekend/${S.playerId}?choice=skip`, { method:'POST' });
-    toast(r.message, 'info');
+    await api(`/season/allstar-weekend/${S.playerId}?choice=skip`, { method:'POST' });
+    toast('You sat out the weekend events.', 'info');
     await refreshPlayer(); renderDashboard($('#main'));
     return;
   }
-  try {
-    const opts = await api(`/season/allstar-weekend-options/${S.playerId}`);
-    const items = choice === 'dunk' ? opts.dunks : opts.spots;
-    S._contest = { type: choice, round: 1, scores: [], opts, items };
-    showContestPicker();
-  } catch(e) { toast('Failed: '+e.message,'error'); }
+  const opts = await api(`/season/allstar-weekend-options/${S.playerId}`);
+  if (choice === 'dunk' && !opts.dunk_eligible) { toast('You need vertical≥55, finishing≥50, or clout≥70 to enter the dunk contest.','warn'); return; }
+  if (choice === 'three' && !opts.three_eligible) { toast('You need catch_shoot_3pt≥50 or clout≥70 to enter the 3-point contest.','warn'); return; }
+  if (choice === 'dunk') startDunkContest(opts);
+  else startThreeContest(opts);
 }
 
-function showContestPicker() {
-  const c = S._contest; if (!c) return;
+// ─── Dunk Contest: NBA format, 2 dunks per round, 40-50 score per dunk ───
+function startDunkContest(opts) {
+  S._contest = { type: 'dunk', dunks: [], opts };
+  showDunkPicker(1);
+}
+
+function showDunkPicker(dunkNum) {
   document.getElementById('contest-modal')?.remove();
-  const isDunk = c.type === 'dunk';
-  const items = c.items;
+  const c = S._contest;
+  const overlay = document.createElement('div');
+  overlay.id = 'contest-modal';
+  overlay.className = 'fixed inset-0 z-[72] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
+  overlay.innerHTML = `<div class="card p-5 w-full max-w-xl max-h-[85vh] flex flex-col">
+    <h3 class="text-lg font-bold text-white mb-1">🛫 Dunk Contest — Dunk #${dunkNum}/2</h3>
+    ${c.dunks.length ? `<p class="text-xs text-faint mb-2">Previous: ${c.dunks.map(d=>d.score).join(' + ')} = ${c.dunks.reduce((s,d)=>s+d.score,0)}</p>` : ''}
+    <p class="text-xs text-muted mb-3">Pick your dunk type and distance. Score range: 40-50. AI opponents will also perform.</p>
+    <div class="mb-3">
+      <label class="text-xs font-semibold text-muted">Dunk Type</label>
+      <div class="grid grid-cols-2 gap-2 mt-1 max-h-40 overflow-y-auto" id="dunk-types">
+        ${c.opts.dunks.map(d => `<button class="text-left card card-hover p-2 text-xs" onclick="this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('ring-2','ring-accent'));this.classList.add('ring-2','ring-accent');this.closest('.card').dataset.dunk='${d.id}'">
+          <span class="text-white font-semibold">${d.icon} ${pick(d.label, S.season?.lang)}</span><span class="text-faint ml-1">diff ${d.diff}</span>
+        </button>`).join('')}
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="text-xs font-semibold text-muted">Distance</label>
+      <div class="flex gap-2 mt-1" id="dunk-distances">
+        ${c.opts.distances.map(d => `<button class="text-left card card-hover p-2 text-xs flex-1" onclick="this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('ring-2','ring-accent'));this.classList.add('ring-2','ring-accent');this.closest('.card').dataset.dist='${d.id}'">
+          <span class="text-white font-semibold">${pick(d.label, S.season?.lang)}</span>
+        </button>`).join('')}
+      </div>
+    </div>
+    <button class="btn-primary w-full mt-auto" onclick="submitDunk(${dunkNum})">🏀 Perform Dunk #${dunkNum}</button>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function submitDunk(dunkNum) {
+  const dunkEl = document.querySelector('#dunk-types .ring-2');
+  const distEl = document.querySelector('#dunk-distances .ring-2');
+  if (!dunkEl) { toast('Pick a dunk type.','warn'); return; }
+  if (!distEl) { toast('Pick a distance.','warn'); return; }
+  const dunkId = dunkEl.closest('[data-dunk]')?.dataset?.dunk || dunkEl.dataset.dunk;
+  const distId = distEl.closest('[data-dist]')?.dataset?.dist || distEl.dataset.dist;
+  document.getElementById('contest-modal')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'contest-modal';
+  overlay.className = 'fixed inset-0 z-[72] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
+  overlay.innerHTML = `<div class="card p-5 w-full max-w-xl max-h-[85vh] flex flex-col">
+    <h3 class="text-lg font-bold text-white mb-3">🛫 Dunk #${dunkNum} Results</h3>
+    <div id="dunk-result-area" class="flex-1 overflow-y-auto"></div>
+    <div id="dunk-continue" class="mt-3"></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const area = document.getElementById('dunk-result-area');
+  try {
+    const r = await api(`/contest/dunk/${S.playerId}?dunk=${dunkId}&distance=${distId}`);
+    // Animate: show player result first, then opponents one by one
+    area.insertAdjacentHTML('beforeend', `<div class="p-2 rounded bg-accent/10 border border-accent/30 mb-2">
+      <span class="text-accent font-bold">⭐ You: ${r.dunk} from ${r.distance} → ${r.player_score}</span>
+    </div>`);
+    await sleep(400);
+    for (const opp of r.opponents) {
+      area.insertAdjacentHTML('beforeend', `<div class="p-1 text-xs text-muted border-b border-bg-border">${opp.name}: ${opp.dunk} from ${opp.distance} → ${opp.score}</div>`);
+      await sleep(300);
+    }
+    area.insertAdjacentHTML('beforeend', `<div class="mt-2 text-xs"><p class="font-semibold text-muted mb-1">Rankings:</p>${r.rankings.map((p,i) => `<div class="flex justify-between ${p.is_player?'text-accent font-bold':'text-white'} py-0.5"><span>${i+1}. ${p.name}</span><span class="mono">${p.score}</span></div>`).join('')}</div>`);
+    const c = S._contest;
+    c.dunks.push({ dunk: r.dunk, distance: r.distance, score: r.player_score, rankings: r.rankings });
+    const btn = document.getElementById('dunk-continue');
+    if (dunkNum >= 2) {
+      const total = c.dunks.reduce((s, d) => s + d.score, 0);
+      const placement = r.rankings.findIndex(p => p.is_player) + 1;
+      btn.innerHTML = `<div class="border-t border-bg-border pt-3 text-center">
+        <p class="text-accent font-bold mb-1">Your Total: ${total} (${c.dunks.map(d=>d.score).join(' + ')})</p>
+        <p class="text-xs text-muted mb-3">Placement: #${placement}</p>
+        <button class="btn-primary" onclick="finishContest('dunk', ${placement}, ${total})">🏁 Finish</button>
+      </div>`;
+    } else {
+      btn.innerHTML = `<button class="btn-primary w-full" onclick="showDunkPicker(${dunkNum + 1})">➡️ Dunk #${dunkNum + 1}</button>`;
+    }
+  } catch(e) { area.innerHTML = `<p class="text-bad">${e.message}</p>`; }
+}
+
+// ─── 3-Point Contest: NBA format, 5 racks + 2 logo, money ball rack choice ───
+function startThreeContest(opts) {
+  document.getElementById('contest-modal')?.remove();
   const overlay = document.createElement('div');
   overlay.id = 'contest-modal';
   overlay.className = 'fixed inset-0 z-[72] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
   overlay.innerHTML = `<div class="card p-5 w-full max-w-lg max-h-[85vh] flex flex-col">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="text-lg font-bold text-white">${isDunk ? '🛫 Dunk Contest' : '🎯 Three-Point Contest'}</h3>
-      <span class="text-xs text-accent font-bold">Round ${c.round} / 3</span>
-    </div>
-    <p class="text-xs text-muted mb-3">Pick your ${isDunk ? 'dunk' : 'shot spot'} for this round. 5 attempts each, scored individually.</p>
-    ${c.scores.length ? `<div class="mb-3 text-xs text-muted">Previous rounds: ${c.scores.map((s,i) => `R${i+1}=${s}`).join(' · ')} · Total so far: ${c.scores.reduce((a,b)=>a+b,0)}</div>` : ''}
-    <div class="space-y-2 flex-1 overflow-y-auto">
-      ${items.map(it => `<button class="w-full text-left card card-hover p-3" onclick="playContestRound('${c.type}','${it.id}')">
-        <div class="flex items-center justify-between"><span class="text-white font-semibold">${it.icon} ${pick(it.label, S.season?.lang)}</span><span class="text-xs text-warn mono">${isDunk ? 'difficulty '+it.difficulty.toFixed(1) : ''}</span></div>
-        <span class="text-xs text-muted">${esc(pick(it.desc, S.season?.lang))}</span>
+    <h3 class="text-lg font-bold text-white mb-2">🎯 Three-Point Contest</h3>
+    <p class="text-xs text-muted mb-3">NBA format: 5 racks (5 balls each) + 2 logo shots = 27 balls, max 36 points. Choose where to place your <b class="text-warn">all-money-ball rack</b> (5 × 2pt = 10pt from that position).</p>
+    <label class="text-xs font-semibold text-muted">All-Money-Ball Rack Position</label>
+    <div class="grid grid-cols-2 gap-2 mt-1 mb-3" id="three-racks">
+      ${opts.racks.map((r,i) => `<button class="text-left card card-hover p-2 text-xs" onclick="this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('ring-2','ring-accent'));this.classList.add('ring-2','ring-accent');this.dataset.idx='${i}'">
+        <span class="text-white font-semibold">${r.icon} ${pick(r.label, S.season?.lang)}</span>
       </button>`).join('')}
     </div>
+    <button class="btn-primary mt-auto" onclick="submitThreeContest()">🏀 Start Contest</button>
   </div>`;
   document.body.appendChild(overlay);
 }
 
-async function playContestRound(type, action) {
-  const c = S._contest; if (!c) return;
+async function submitThreeContest() {
+  const rackEl = document.querySelector('#three-racks .ring-2');
+  if (!rackEl) { toast('Pick your money-ball rack position.','warn'); return; }
+  const moneyRack = parseInt(rackEl.dataset.idx) || 0;
   document.getElementById('contest-modal')?.remove();
   const overlay = document.createElement('div');
   overlay.id = 'contest-modal';
   overlay.className = 'fixed inset-0 z-[72] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
-  overlay.innerHTML = `<div class="card p-5 w-full max-w-lg max-h-[85vh] flex flex-col">
-    <h3 class="text-lg font-bold text-white mb-2">${type==='dunk'?'🛫 Dunk Contest':'🎯 Three-Point Contest'} — Round ${c.round}</h3>
-    <div id="contest-attempts" class="space-y-1.5 text-sm flex-1 overflow-y-auto mb-3"></div>
-    <div id="contest-round-summary" class="mb-3"></div>
-    <div id="contest-continue"></div>
+  overlay.innerHTML = `<div class="card p-5 w-full max-w-xl max-h-[85vh] flex flex-col">
+    <h3 class="text-lg font-bold text-white mb-3">🎯 Three-Point Contest — Results</h3>
+    <div id="three-result-area" class="flex-1 overflow-y-auto text-xs"></div>
+    <div id="three-continue" class="mt-3"></div>
   </div>`;
   document.body.appendChild(overlay);
-  const attemptEl = document.getElementById('contest-attempts');
+  const area = document.getElementById('three-result-area');
   try {
-    const r = await api(`/contest/round/${S.playerId}?type=${type}&round=${c.round}&action=${encodeURIComponent(action)}`);
-    const attempts = r.attempts || [];
-    for (const a of attempts) {
-      const scoreColor = a.score >= 9 ? '#fbbf24' : a.score >= 7 ? '#34d399' : a.score >= 5 ? '#06b6d4' : '#f87171';
-      attemptEl.insertAdjacentHTML('beforeend', `<div class="flex items-center justify-between py-1 border-b border-bg-border">
-        <span class="text-white">${a.label} #${a.attempt}</span>
-        <span class="mono font-bold" style="color:${scoreColor}">${type==='three'?(a.made?'✓ '+a.score:'✗ 0'):a.score}</span>
-      </div>
-      <p class="text-xs text-faint italic mb-1.5">${a.commentary}</p>`);
-      await sleep(600);
+    const r = await api(`/contest/three/${S.playerId}?money_rack=${moneyRack}`);
+    // Animate racks one by one
+    for (const rack of r.racks) {
+      const balls = rack.balls.map(b => b.made ? (b.points >= 2 ? '🟡' : '🟢') : '🔴').join('');
+      const rackTotal = rack.balls.reduce((s, b) => s + b.points, 0);
+      area.insertAdjacentHTML('beforeend', `<div class="flex items-center gap-2 py-1 border-b border-bg-border">
+        <span class="text-white font-semibold w-20">${pick(rack.rack.label, S.season?.lang)}</span>
+        <span class="mono">${balls}</span>
+        <span class="mono text-accent ml-auto">${rackTotal}pts</span>
+      </div>`);
+      await sleep(250);
     }
-    c.scores.push(r.round_total);
-    const total = c.scores.reduce((a,b) => a+b, 0);
-    document.getElementById('contest-round-summary').innerHTML = `<div class="text-center py-2 border-t border-bg-border">
-      <p class="text-sm text-muted">Round ${c.round} total: <b class="text-accent">${r.round_total}</b></p>
-      <p class="text-xs text-faint">Running total: ${total} (${c.scores.join(' + ')})</p>
-    </div>`;
-    if (c.round >= 3) {
-      await api(`/season/allstar-weekend/${S.playerId}?choice=${type}&action=${action}`, { method:'POST' });
-      document.getElementById('contest-continue').innerHTML = `
-        <div class="text-center py-3 border-t border-bg-border">
-          <p class="text-lg font-bold text-accent mb-1">Final Score: ${total}</p>
-          <p class="text-xs text-muted mb-3">Rounds: ${c.scores.map((s,i)=>`R${i+1}=${s}`).join(' · ')}</p>
-          <button class="btn-primary" onclick="document.getElementById('contest-modal')?.remove();S._contest=null;refreshPlayer().then(()=>renderDashboard(document.querySelector('#main')))">🏁 Finish</button>
-        </div>`;
-    } else {
-      document.getElementById('contest-continue').innerHTML = `<button class="btn-primary w-full mt-2" onclick="document.getElementById('contest-modal')?.remove();S._contest.round=${c.round+1};showContestPicker()">➡️ Next Round</button>`;
-    }
-  } catch(e) {
-    document.getElementById('contest-attempts').innerHTML = `<p class="text-bad text-sm">Error: ${e.message}</p>`;
-  }
+    // Logo shots
+    const logoStr = r.logo.map(s => s.made ? '🟢3' : '🔴0').join(' + ');
+    area.insertAdjacentHTML('beforeend', `<div class="flex items-center gap-2 py-1 border-b border-bg-border">
+      <span class="text-white font-semibold w-20">Logo</span><span class="mono">${logoStr}</span>
+    </div>`);
+    await sleep(300);
+    // Player total + rankings
+    area.insertAdjacentHTML('beforeend', `<div class="mt-2 p-2 rounded bg-accent/10 border border-accent/30 text-accent font-bold">Your Total: ${r.player_total} / ${r.max_possible}</div>`);
+    const placement = r.rankings.findIndex(p => p.is_player) + 1;
+    area.insertAdjacentHTML('beforeend', `<div class="mt-2"><p class="font-semibold text-muted mb-1">Rankings:</p>${r.rankings.map((p,i) => `<div class="flex justify-between ${p.is_player?'text-accent font-bold':'text-white'} py-0.5"><span>${i+1}. ${p.name}</span><span class="mono">${p.total}</span></div>`).join('')}</div>`);
+    document.getElementById('three-continue').innerHTML = `<button class="btn-primary w-full mt-2" onclick="finishContest('three', ${placement}, ${r.player_total})">🏁 Finish</button>`;
+  } catch(e) { area.innerHTML = `<p class="text-bad">${e.message}</p>`; }
+}
+
+async function finishContest(type, placement, totalScore) {
+  document.getElementById('contest-modal')?.remove();
+  const r = await api(`/contest/finalize/${S.playerId}?type=${type}&placement=${placement}&total=${totalScore}`, { method:'POST' });
+  toast(r.message, r.placement === 1 ? 'success' : 'info');
+  S._contest = null;
+  await refreshPlayer(); renderDashboard($('#main'));
 }
 
 async function resolveOption(choice) {

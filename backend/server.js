@@ -1887,55 +1887,152 @@ function maybeAllStarWeekend(playerId) {
   return { allstar_weekend: true };
 }
 
-// All-Star weekend events — the player picks specific moves/spots; harder ones
-// pay more but are less likely to land (gated by body/physical attributes).
-const DUNK_ACTIONS = [
-  { id: 'windmill', label: { en: 'Windmill', zh: '大风车' }, icon: '🌪️', desc: { en: 'A clean one-handed windmill.', zh: '一记干净的大风车扣篮。' }, difficulty: 1.3, attr: 'vertical_jump' },
-  { id: '360', label: { en: '360 Spin', zh: '360转身' }, icon: '🌀', desc: { en: 'A full spin in the air before the throwdown.', zh: '空中转体一圈再扣。' }, difficulty: 2.0, attr: 'vertical_jump' },
-  { id: 'tomahawk', label: { en: 'Tomahawk', zh: '战斧劈扣' }, icon: '🪓', desc: { en: 'An aggressive one-handed hammer.', zh: '一记凶狠的单臂劈扣。' }, difficulty: 1.5, attr: 'strength' },
-  { id: 'between_legs', label: { en: 'Between the Legs', zh: '胯下换手' }, icon: '🦵', desc: { en: 'Switch hands under the leg mid-air.', zh: '空中胯下换手再扣。' }, difficulty: 2.5, attr: 'vertical_jump' },
-  { id: 'poster', label: { en: 'Jump Over a Person', zh: '跨人暴扣' }, icon: '🧍', desc: { en: 'Catch a lob over a crouching mascot.', zh: '越过一个蹲着的人接球扣篮。' }, difficulty: 3.2, attr: 'finishing' },
-];
-const THREE_SPOTS = [
-  { id: 'corner', label: { en: 'Corner', zh: '底角' }, icon: '📐', desc: { en: 'The short corner three.', zh: '底角三分。' }, difficulty: 1.1 },
-  { id: 'wing', label: { en: 'Wing', zh: '侧翼' }, icon: '🎯', desc: { en: 'The 45-degree wing.', zh: '侧翼45度三分。' }, difficulty: 1.4 },
-  { id: 'top', label: { en: 'Top of the Key', zh: '弧顶' }, icon: '🏹', desc: { en: 'The deep arc three.', zh: '弧顶远距离三分。' }, difficulty: 1.8 },
-  { id: 'logo', label: { en: 'Logo Range', zh: 'Logo 三分' }, icon: '💥', desc: { en: 'Way downtown — the ultimate heat check.', zh: '超远距离——终极手感检验。' }, difficulty: 2.5 },
+// All-Star Weekend: NBA-style dunk and 3pt contests.
+// ─── Dunk Contest ───
+// 4 participants, first round 2 dunks each, top 2 advance to finals.
+// Each dunk scored 40-50 by 5 simulated judges.
+// Player picks dunk type + distance per dunk. AI opponents generated on the fly.
+const DUNK_TYPES = [
+  { id: 'windmill', label: { en: 'Windmill', zh: '大风车' }, icon: '🌪️', desc: { en: 'A clean one-handed windmill.', zh: '一记干净的大风车扣篮。' }, diff: 0 },
+  { id: 'tomahawk', label: { en: 'Tomahawk', zh: '战斧劈扣' }, icon: '🪓', desc: { en: 'An aggressive one-handed hammer.', zh: '一记凶狠的单臂劈扣。' }, diff: 0.5 },
+  { id: 'reverse', label: { en: 'Reverse', zh: '反身扣篮' }, icon: '🔄', desc: { en: 'Turn your back to the basket mid-air.', zh: '空中转身背对篮筐扣进。' }, diff: 0.5 },
+  { id: '360', label: { en: '360°', zh: '360度转身' }, icon: '🌀', desc: { en: 'A full rotation before slamming.', zh: '空中转体一圈再扣。' }, diff: 1.5 },
+  { id: 'between_legs', label: { en: 'Between the Legs', zh: '胯下换手' }, icon: '🦵', desc: { en: 'Switch hands under the leg.', zh: '空中胯下换手再扣。' }, diff: 2.0 },
+  { id: 'eastbay', label: { en: 'Eastbay', zh: '拉杆背扣' }, icon: '💫', desc: { en: 'Between the legs from behind the back.', zh: '背后换手胯下再扣——极致拉杆。' }, diff: 3.0 },
+  { id: 'cradle', label: { en: 'Cradle', zh: '摇篮扣' }, icon: '🍼', desc: { en: 'Cup the ball like a baby, then slam.', zh: '单手托球如摇篮，然后暴扣。' }, diff: 1.0 },
+  { id: 'two_hand_power', label: { en: 'Two-Hand Power', zh: '双手暴力扣' }, icon: '💪', desc: { en: 'Both hands, maximum force.', zh: '双手灌篮，力道拉满。' }, diff: 0.3 },
+  { id: 'poster', label: { en: 'Over Someone', zh: '隔人暴扣' }, icon: '🧍', desc: { en: 'Rise up and dunk over a defender.', zh: '越过防守者扣篮。' }, diff: 2.5 },
+  { id: '360_between', label: { en: '360° Between Legs', zh: '360度胯下' }, icon: '🌀🦵', desc: { en: '360 spin AND between the legs — the ultimate.', zh: '360度转身加胯下——终极动作。' }, diff: 4.0 },
 ];
 
-function resolveAllStarWeekend(playerId, choice, action) {
+const DUNK_DISTANCES = [
+  { id: 'close', label: { en: 'Close Range', zh: '近距离' }, penalty: 0, desc: { en: 'Standard approach.', zh: '标准起步。' } },
+  { id: 'ft_line', label: { en: 'Free Throw Line', zh: '罚球线起跳' }, penalty: 1.5, desc: { en: 'Take off from the free throw line.', zh: '从罚球线起跳——经典之作。' } },
+  { id: 'half_court', label: { en: 'Half Court', zh: '半场起跑' }, penalty: 3.0, desc: { en: 'Full speed from half court.', zh: '全场冲刺到篮下——极考验体能。' } },
+];
+
+// Eligibility: dunk needs vertical_jump>=55 or finishing>=50 or clout>=70.
+function dunkEligible(p) { return (p.vertical_jump >= 55 || p.finishing >= 50 || (p.clout || 0) >= 70); }
+
+// Score one dunk attempt: returns 40-50.
+function scoreDunk(playerOverall, dunkDiff, distPenalty, attempt) {
+  const energyDecay = (attempt - 1) * 0.3;
+  const base = 46 - (dunkDiff + distPenalty) * 1.1 - energyDecay;
+  const attrBonus = (playerOverall - 70) * 0.04;
+  const raw = base + attrBonus + gauss(0, 1.2);
+  return round1(clamp(raw, 38, 50));
+}
+
+// Generate AI dunk contest participants (3 opponents with varied attributes).
+function generateDunkOpponents() {
+  const archetypes = [
+    { name: 'High-Flyer', vert: 88, fin: 70, str: 55, ovr: 82 },
+    { name: 'Power Dunker', vert: 72, fin: 80, str: 85, ovr: 78 },
+    { name: 'Rookie Showman', vert: 82, fin: 65, str: 60, ovr: 75 },
+  ];
+  return archetypes.map((a, i) => ({
+    id: 'ai_' + i, name: a.name, is_player: false,
+    overall: a.ovr, vertical_jump: a.vert, finishing: a.fin, strength: a.str,
+  }));
+}
+
+// AI picks a dunk: weighted random favoring difficulty matched to ability.
+function aiPickDunk(ai) {
+  const ability = (ai.vertical_jump + ai.finishing + ai.strength) / 3;
+  const weighted = DUNK_TYPES.map(d => ({ ...d, weight: Math.max(1, 10 - Math.abs(d.diff * 1.2 - (ability - 55) / 15)) }));
+  const totalW = weighted.reduce((s, d) => s + d.weight, 0);
+  let r = Math.random() * totalW;
+  for (const d of weighted) { r -= d.weight; if (r <= 0) return d; }
+  return weighted[0];
+}
+function aiPickDistance(ai) {
+  const r = Math.random();
+  if (r < 0.6) return DUNK_DISTANCES[0];
+  if (r < 0.85) return DUNK_DISTANCES[1];
+  return DUNK_DISTANCES[2];
+}
+
+// ─── 3-Point Contest ───
+// 8 participants, first round + finals (top 3 advance).
+// 5 racks × 5 balls + 2 logo shots = 27 balls, max 36 points.
+// Player chooses which rack is all-money-ball (5 × 2pt = 10pt max).
+const THREE_RACKS = [
+  { id: 'left_corner', label: { en: 'Left Corner', zh: '左底角' }, icon: '📐' },
+  { id: 'left_wing', label: { en: 'Left Wing', zh: '左侧翼' }, icon: '🎯' },
+  { id: 'top', label: { en: 'Top of Key', zh: '弧顶' }, icon: '🏹' },
+  { id: 'right_wing', label: { en: 'Right Wing', zh: '右侧翼' }, icon: '🎯' },
+  { id: 'right_corner', label: { en: 'Right Corner', zh: '右底角' }, icon: '📐' },
+];
+
+// Eligibility: 3pt needs catch_shoot_3pt>=50 or clout>=70.
+function threeEligible(p) { return (p.catch_shoot_3pt >= 50 || (p.clout || 0) >= 70); }
+
+// Simulate one rack (5 balls): 4 regular (1pt) + 1 money ball (2pt).
+// `makeProb` is per-ball probability. Returns array of {ball, made, points}.
+function simRack(makeProb, isMoneyRack) {
+  const balls = [];
+  for (let i = 0; i < 4; i++) { const made = Math.random() < makeProb; balls.push({ ball: 'regular', made, points: made ? 1 : 0 }); }
+  const moneyMade = Math.random() < makeProb;
+  if (isMoneyRack) {
+    // All-money-ball rack: 5 balls, each 2pt.
+    return Array.from({length: 5}, () => { const made = Math.random() < makeProb; return { ball: 'money', made, points: made ? 2 : 0 }; });
+  }
+  balls.push({ ball: 'money', made: moneyMade, points: moneyMade ? 2 : 0 });
+  return balls;
+}
+
+// Simulate full 3pt round for one player: 5 racks + 2 logo shots.
+// moneyRackIdx = which rack (0-4) is all-money-ball.
+function simThreeRound(tpAttr, moneyRackIdx) {
+  const makeProb = clamp(tpAttr / 200 + 0.12, 0.15, 0.58);
+  const racks = [];
+  for (let i = 0; i < 5; i++) {
+    racks.push({ rack: THREE_RACKS[i], balls: simRack(makeProb, i === moneyRackIdx) });
+  }
+  const logo1 = { made: Math.random() < (makeProb * 0.5), points: 0 };
+  if (logo1.made) logo1.points = 3;
+  const logo2 = { made: Math.random() < (makeProb * 0.5), points: 0 };
+  if (logo2.made) logo2.points = 3;
+  const total = racks.reduce((s, r) => s + r.balls.reduce((s2, b) => s2 + b.points, 0), 0) + logo1.points + logo2.points;
+  return { racks, logo: [logo1, logo2], total };
+}
+
+// Generate AI 3pt participants (7 opponents).
+function generateThreeOpponents() {
+  const archetypes = [
+    { name: 'Splash Brother', tp: 88, ovr: 85 }, { name: 'Sharpshooter', tp: 82, ovr: 80 },
+    { name: 'Catch-and-Shoot', tp: 78, ovr: 76 }, { name: 'Streaky Gunner', tp: 72, ovr: 74 },
+    { name: 'Spot-Up Sniper', tp: 85, ovr: 79 }, { name: 'Volume Shooter', tp: 68, ovr: 72 },
+    { name: 'Rookie Marksman', tp: 75, ovr: 70 },
+  ];
+  return archetypes.map((a, i) => ({
+    id: 'ai3_' + i, name: a.name, is_player: false,
+    catch_shoot_3pt: a.tp, overall: a.ovr, money_rack: Math.floor(Math.random() * 5),
+  }));
+}
+
+function resolveAllStarWeekend(playerId, choice) {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
   if (!p.pending_weekend) throw httpError(400, 'No pending All-Star Weekend decision.');
-  let result;
-  if (choice === 'dunk') {
-    const act = DUNK_ACTIONS.find(a => a.id === action) || DUNK_ACTIONS[0];
-    const attr = p[act.attr] ?? 50;
-    const successProb = clamp(attr / 140 - act.difficulty * 0.15 + 0.35, 0.08, 0.78);
-    const success = Math.random() < successProb;
-    const clout = success ? Math.max(2, Math.round(act.difficulty * 6)) : 1;
-    db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+?), injury_risk=MIN(100,injury_risk+?) WHERE id=?')
-      .run(clout, clout, success ? 3 : 1, success ? 3 : 2, playerId);
-    result = { choice, action: act.label, success, clout,
-      message: success ? `You threw down the ${act.label} and the judges went wild — a ${clout} clout/fame bump.`
-                       : `You missed the ${act.label} and the crowd winced — a small ${clout} clout bump for showing up.` };
-  } else if (choice === 'three') {
-    const spot = THREE_SPOTS.find(s => s.id === action) || THREE_SPOTS[0];
-    const tp = p.catch_shoot_3pt ?? 35;
-    // NBA 3-pt contest realism: elite shooters ~40% from easy spots, ~15-20% from deep.
-    const base = tp / 200 + 0.08;
-    const makeProb = clamp(base / Math.pow(spot.difficulty, 1.3), 0.04, 0.48);
-    let made = 0;
-    for (let i = 0; i < 5; i++) if (Math.random() < makeProb) made++;
-    const clout = clamp(Math.round(made * 1.5), 0, 8);
-    db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+1) WHERE id=?').run(clout, clout, playerId);
-    result = { choice, action: spot.label, made, clout,
-      message: `From the ${spot.label}, you hit ${made}/5 — a ${clout} clout/fame bump.` };
-  } else {
-    result = { choice, message: 'You sat out the weekend events.' };
-  }
   db.prepare('UPDATE players SET pending_weekend=0 WHERE id=?').run(playerId);
-  return result;
+  return { choice, message: choice === 'skip' ? 'You sat out the weekend events.' : 'Contest in progress.' };
+}
+
+// Finalize a completed contest: apply clout/fan_base rewards based on placement.
+function finalizeContest(playerId, type, placement, totalScore) {
+  const isWinner = placement === 1;
+  const isFinalist = placement <= 2;
+  const clout = isWinner ? 8 : isFinalist ? 5 : placement <= 3 ? 3 : 1;
+  const fan = isWinner ? 6 : isFinalist ? 3 : placement <= 3 ? 2 : 0;
+  const morale = isWinner ? 4 : isFinalist ? 2 : 0;
+  const label = type === 'dunk' ? 'Dunk Contest' : 'Three-Point Contest';
+  db.prepare('UPDATE players SET clout=MIN(100,clout+?), fan_base=MIN(100,fan_base+?), morale=MIN(100,morale+?), injury_risk=MIN(100,injury_risk+?) WHERE id=?')
+    .run(clout, fan, morale, type === 'dunk' ? 2 : 0, playerId);
+  db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)")
+    .run(playerId, getLeagueState(playerId).current_season, 'event',
+      `${label}: ${isWinner ? 'Won' : isFinalist ? 'Runner-up' : `#${placement}`} with ${totalScore} points.`);
+  return { placement, total_score: totalScore, clout, fan_base: fan, message: isWinner ? `You won the ${label}!` : `Finished #${placement} in the ${label}.` };
 }
 
 // ------------------------------------------------------------
@@ -4107,51 +4204,53 @@ app.put('/api/player/:id/load-management', wrap((req) => {
 }));
 app.post('/api/player/:id/injury-treatment', wrap((req) => applyInjuryTreatment(req.params.id, req.query.option)));
 app.post('/api/player/:id/retire', wrap((req) => resolveRetirement(req.params.id, req.query.choice)));
-app.get('/api/season/allstar-weekend-options/:id', wrap(() => ({ dunks: DUNK_ACTIONS, spots: THREE_SPOTS })));
-app.post('/api/season/allstar-weekend/:id', wrap((req) => resolveAllStarWeekend(req.params.id, req.query.choice, req.query.action)));
+app.get('/api/season/allstar-weekend-options/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  return { dunks: DUNK_TYPES, distances: DUNK_DISTANCES, racks: THREE_RACKS, dunk_eligible: dunkEligible(p), three_eligible: threeEligible(p) };
+}));
+app.post('/api/season/allstar-weekend/:id', wrap((req) => resolveAllStarWeekend(req.params.id, req.query.choice)));
 
-// Multi-round contest scoring: scores 5 attempts for one round.
-// type = 'dunk' or 'three', round = 1/2/3, action = dunk id or spot id.
-const DUNK_COMMENTARY = { en: { perfect: ['Absolutely electrifying!', 'The crowd is on its feet!', 'Perfection!'], great: ['What a throwdown!', 'Nasty slam!', 'The judges loved it!'], good: ['Solid dunk!', 'Respectable finish.', 'Clean slam.'], miss: ['Couldn\'t finish it.', 'The crowd winced.', 'A difficult attempt — not quite.'], }, zh: { perfect: ['太炸了！', '全场沸腾！', '完美！'], great: ['暴扣！', '扣得太狠了！', '评委都站起来鼓掌！'], good: ['稳稳的扣篮。', '中规中矩。', '干净利落。'], miss: ['没扣进去…', '现场一片叹息。', '难度太高了，没完成。'], } };
-const THREE_COMMENTARY = { en: { hot: ['On fire!', 'Automatic!', 'Splash!'], good: ['Nailed it.', 'Pure stroke.', 'Cash.'], cold: ['Just missed.', 'Rimmed out.', 'In and out.'], }, zh: { hot: ['手感火热！', '百发百中！', '稳稳命中！'], good: ['投进了。', '漂亮的手型。', '手感不错。'], cold: ['差一点。', '弹框而出。', '涮了一圈没进。'], } };
-
-app.get('/api/contest/round/:id', wrap((req) => {
+// Multi-round contest scoring: scores one dunk (all attempts) for one round.
+// Returns the dunk score (40-50), AI opponents' scores for this dunk, and running rankings.
+app.get('/api/contest/dunk/:id', wrap((req) => {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
   if (!p) throw httpError(404, 'Player not found');
-  const type = req.query.type;
-  const round = Math.min(Math.max(Number(req.query.round) || 1, 1), 3);
-  const action = req.query.action;
-  if (!action) throw httpError(400, 'Missing action');
+  const dunkId = req.query.dunk;
+  const distId = req.query.distance;
+  const dunk = DUNK_TYPES.find(d => d.id === dunkId) || DUNK_TYPES[0];
+  const dist = DUNK_DISTANCES.find(d => d.id === distId) || DUNK_DISTANCES[0];
   const lang = getLeagueState(req.params.id).lang || 'en';
-  const attempts = [];
-  if (type === 'dunk') {
-    const dunk = DUNK_ACTIONS.find(d => d.id === action) || DUNK_ACTIONS[0];
-    const attr = p[dunk.attr] ?? 50;
-    const baseDifficulty = 5.5 + dunk.difficulty * 1.15;
-    for (let i = 0; i < 5; i++) {
-      const energyPenalty = (i * 0.12);
-      const raw = baseDifficulty + (attr - 60) / 35 + gauss(0, 0.85) - energyPenalty;
-      const score = round1(clamp(raw, 2, 10));
-      let commentKey = score >= 9 ? 'perfect' : score >= 7 ? 'great' : score >= 5 ? 'good' : 'miss';
-      attempts.push({ attempt: i + 1, score, label: pick(dunk.label, lang), commentary: choice(DUNK_COMMENTARY[lang]?.[commentKey] || DUNK_COMMENTARY.en[commentKey]) });
-    }
-  } else if (type === 'three') {
-    const spot = THREE_SPOTS.find(s => s.id === action) || THREE_SPOTS[0];
-    const tp = p.catch_shoot_3pt ?? 35;
-    const makeProb = clamp(tp / 200 - (spot.difficulty - 1.0) * 0.15 + 0.15, 0.04, 0.48);
-    for (let i = 0; i < 5; i++) {
-      const made = Math.random() < makeProb;
-      const baseScore = made ? (spot.difficulty >= 2 ? 3 : 2) : 0;
-      const energyPenalty = Math.round(i * 0.3);
-      const score = Math.max(0, baseScore - energyPenalty);
-      let commentKey = score >= 3 ? 'hot' : score >= 2 ? 'good' : 'cold';
-      attempts.push({ attempt: i + 1, score, label: pick(spot.label, lang), made, commentary: choice(THREE_COMMENTARY[lang]?.[commentKey] || THREE_COMMENTARY.en[commentKey]) });
-    }
-  } else {
-    throw httpError(400, 'Invalid type. Use dunk or three.');
-  }
-  const roundTotal = attempts.reduce((s, a) => s + a.score, 0);
-  return { type, round, action, attempts, round_total: roundTotal };
+  const playerScore = scoreDunk(calculateOverallRating(p), dunk.diff, dist.penalty, 1);
+  const opponents = generateDunkOpponents();
+  const opponentScores = opponents.map(ai => {
+    const aiDunk = aiPickDunk(ai);
+    const aiDist = aiPickDistance(ai);
+    return { name: ai.name, dunk: pick(aiDunk.label, lang), distance: pick(aiDist.label, lang), score: scoreDunk(ai.overall, aiDunk.diff, aiDist.penalty, 1) };
+  });
+  const all = [{ name: p.name, dunk: pick(dunk.label, lang), distance: pick(dist.label, lang), score: playerScore, is_player: true }, ...opponentScores]
+    .sort((a, b) => b.score - a.score);
+  return { dunk: pick(dunk.label, lang), distance: pick(dist.label, lang), player_score: playerScore, rankings: all, opponents: opponentScores };
+}));
+
+// Simulate one full 3pt contest round for the player; returns all 27 ball results.
+app.get('/api/contest/three/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const moneyRack = Number(req.query.money_rack) || 0;
+  const lang = getLeagueState(req.params.id).lang || 'en';
+  const playerRound = simThreeRound(p.catch_shoot_3pt ?? 35, moneyRack);
+  const opponents = generateThreeOpponents();
+  const opponentResults = opponents.map(ai => {
+    const r = simThreeRound(ai.catch_shoot_3pt ?? 60, ai.money_rack);
+    return { name: ai.name, total: r.total };
+  });
+  const all = [{ name: p.name, total: playerRound.total, is_player: true, money_rack: moneyRack }, ...opponentResults]
+    .sort((a, b) => b.total - a.total);
+  return { racks: playerRound.racks, logo: playerRound.logo, player_total: playerRound.total, rankings: all, max_possible: 36 };
+}));
+
+app.post('/api/contest/finalize/:id', wrap((req) => {
+  return finalizeContest(req.params.id, req.query.type, Number(req.query.placement), Number(req.query.total));
 }));
 app.get('/api/player/:id/second-life', wrap((req) => ({ options: getSecondLifeOptions(req.params.id), chosen: db.prepare('SELECT second_life, legacy_score FROM players WHERE id=?').get(req.params.id) })));
 app.post('/api/player/:id/second-life', wrap((req) => chooseSecondLife(req.params.id, req.query.path)));
