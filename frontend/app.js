@@ -1676,6 +1676,11 @@ async function renderGame(m) {
         </div>
       </div>
 
+      <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-300 mb-1">📊 Tactical Analysis</h3>
+        <div id="g-analysis"><p class="text-muted text-sm">Loading…</p></div>
+      </div>
+
       ${upcoming.length ? `
       <div class="card p-5">
         <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Upcoming Schedule')}</h3>
@@ -1720,6 +1725,41 @@ async function renderGame(m) {
   $('#g-load').onchange = e => { api(`/player/${S.playerId}/load-management?enabled=${e.target.checked}`,{method:'PUT'}); S.player.load_management=e.target.checked; };
   $('#g-tdef').onchange = e => setTactics('defense', e.target.value);
   $('#g-toff').onchange = e => setTactics('offense', e.target.value);
+  loadAnalysis();
+}
+
+async function loadAnalysis() {
+  const el = $('#g-analysis'); if (!el) return;
+  try {
+    const r = await api(`/analysis/tactics/${S.playerId}`);
+    const def = S.player.tactics_defense || 'balanced';
+    const off = S.player.tactics_offense || 'balanced';
+    const defFx = r.defense_effects?.[def] || {};
+    const offFx = r.offense_effects?.[off] || {};
+    const last = r.last_review;
+    const opp = r.opponent;
+    let html = '';
+    // Current tactic effects
+    html += `<div class="grid md:grid-cols-2 gap-3 mb-3">
+      <div class="text-xs"><p class="font-semibold text-muted mb-1">Current Defense: <span class="text-white">${def}</span></p><p class="text-faint">${defFx.comment || ''}</p></div>
+      <div class="text-xs"><p class="font-semibold text-muted mb-1">Current Offense: <span class="text-white">${off}</span></p><p class="text-faint">${offFx.comment || ''}</p></div>
+    </div>`;
+    // Last game review
+    if (last) {
+      html += `<div class="text-xs border-t border-bg-border pt-2 mb-2">
+        <p class="font-semibold text-muted mb-1">Last Game Review</p>
+        <p class="text-faint">Game ${last.game}: <span class="text-white">${last.result} ${last.score}</span> · You: ${last.pts}pts ${last.reb}reb ${last.ast}ast · Tactics: ${last.tactics.defense} / ${last.tactics.offense}</p>
+      </div>`;
+    }
+    // Opponent info
+    if (opp) {
+      html += `<div class="text-xs border-t border-bg-border pt-2">
+        <p class="font-semibold text-muted mb-1">Next Opponent</p>
+        <p class="text-faint">${opp.name} (${opp.abbr}) — Strength: <span class="text-white">${opp.strength}</span></p>
+      </div>`;
+    }
+    el.innerHTML = html || '<p class="text-muted text-sm">No tactical data yet.</p>';
+  } catch(e) { el.innerHTML = '<p class="text-muted text-sm">Couldn\'t load analysis.</p>'; }
 }
 
 async function simGame(btn) {
@@ -2381,14 +2421,15 @@ function gameResult(r) {
 
 async function simPlayoffGame(btn) {
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Simulating…';
+  // Show halftime coaching adjustment modal first.
+  const mods = await showHalftimeModal();
   try {
-    const r = await api(`/season/playoff-game/${S.playerId}`, { method:'POST' });
+    const halftimeQ = mods ? `?halftime=${encodeURIComponent(JSON.stringify(mods))}` : '';
+    const r = await api(`/season/playoff-game/${S.playerId}${halftimeQ}`, { method:'POST' });
     await refreshPlayer(); await refreshSeason(); renderHeader();
-    // Update series score inline without re-rendering the entire page.
     const swEl = $('#pg-series-wins'), slEl = $('#pg-series-losses');
     if (swEl) swEl.textContent = r.series?.wins ?? swEl.textContent;
     if (slEl) slEl.textContent = r.series?.losses ?? slEl.textContent;
-    // Prepend game result (compact summary) above previous results.
     const resultEl = $('#g-result');
     if (resultEl) {
       resultEl.insertAdjacentHTML('afterbegin', gameResult(r.game) + (r.advanced ? playoffSeriesResult(r) : ''));
@@ -2400,10 +2441,41 @@ async function simPlayoffGame(btn) {
       toast(`Eliminated — ${r.playoff_result}.`,'warn'); setTimeout(()=>switchTab('dashboard'), 1800);
     } else if (r.advanced) {
       toast(`Series won! Next: ${r.next_opponent}.`,'success');
-      await renderGame($('#main')); // re-render to show new opponent
+      await renderGame($('#main'));
     }
   } catch(e) { toast('Failed: '+e.message,'error'); }
   finally { btn.disabled = false; }
+}
+
+function showHalftimeModal() {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.id = 'halftime-modal';
+    overlay.className = 'fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
+    const opts = [
+      { id: 'aggressive', label: '🔥 Go Aggressive', desc: 'Raise usage rate — more shots for you, riskier but higher ceiling.' },
+      { id: 'defensive', label: '🛡️ Tighten Defense', desc: 'Commit harder to defense — opponent scoring ×0.95.' },
+      { id: 'three_push', label: '🎯 Shoot More Threes', desc: 'Tell the team to hunt threes — 3pt attempts ×1.3.' },
+      { id: 'slow_down', label: '⏳ Slow It Down', desc: 'Control the tempo — fewer possessions, fewer turnovers.' },
+    ];
+    overlay.innerHTML = `<div class="card p-5 w-full max-w-md">
+      <h3 class="text-lg font-bold text-white mb-1">🏀 Halftime</h3>
+      <p class="text-xs text-muted mb-3">Your coach is asking: how should we adjust the second half?</p>
+      <div class="space-y-2">
+        ${opts.map(o => `<button class="w-full text-left card card-hover p-3" onclick="document.getElementById('halftime-modal').remove();window._halftimeResolve(${JSON.stringify(o.id)})">
+          <p class="text-sm text-white font-semibold">${o.label}</p>
+          <p class="text-xs text-muted">${o.desc}</p>
+        </button>`).join('')}
+      </div>
+      <button class="btn-secondary w-full mt-2" onclick="document.getElementById('halftime-modal').remove();window._halftimeResolve(null)">No change — play it out</button>
+    </div>`;
+    document.body.appendChild(overlay);
+    window._halftimeResolve = (choice) => {
+      const mods = {};
+      if (choice) mods[choice] = true;
+      resolve(choice ? mods : null);
+    };
+  });
 }
 
 function playoffSeriesResult(r) {

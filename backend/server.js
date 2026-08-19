@@ -680,7 +680,7 @@ function tacticModifiers(player) {
   return t;
 }
 
-function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome = null) {
+function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome = null, secondHalfMods = null) {
   const player = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!player) throw httpError(404, 'Player not found');
   const state = getLeagueState(playerId);
@@ -829,6 +829,13 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
     if (posNum === quarterEnd[qi]) {
       qT[qi] = teamScore - qStartT; qO[qi] = oppScore - qStartO;
       qStartT = teamScore; qStartO = oppScore; qi++;
+      // Halftime coaching adjustments: second_half_mods apply from Q3 onward.
+      if (qi === 2 && secondHalfMods) {
+        if (secondHalfMods.aggressive) usageRate *= 1.15;
+        if (secondHalfMods.defensive) { tactics.oppScore *= 0.95; }
+        if (secondHalfMods.three_push) tactics.myThree *= 1.3;
+        if (secondHalfMods.slow_down) { tactics.poss -= 8; tactics.myTov *= 0.85; }
+      }
     }
   }
 
@@ -1921,7 +1928,10 @@ const DUNK_DISTANCES = [
 ];
 
 // Eligibility: dunk needs vertical_jump>=55 or finishing>=50 or clout>=70.
-function dunkEligible(p) { return (p.vertical_jump >= 75 || p.finishing >= 75 || (p.clout || 0) >= 85); }
+function dunkEligible(p) {
+  // Pure athleticism, or elite finishing compensates for moderate vert, or pure fame.
+  return (p.vertical_jump >= 75 || (p.finishing >= 80 && p.vertical_jump >= 60) || (p.clout || 0) >= 85);
+}
 
 // Score one dunk attempt: returns 40-50.
 function scoreDunk(playerOverall, dunkDiff, distPenalty, attempt) {
@@ -1974,7 +1984,10 @@ const THREE_RACKS = [
 ];
 
 // Eligibility: 3pt needs catch_shoot_3pt>=50 or clout>=70.
-function threeEligible(p) { return (p.catch_shoot_3pt >= 75 || p.mid_range >= 80 || (p.clout || 0) >= 85); }
+function threeEligible(p) {
+  // Elite shooting, or strong mid-range with decent catch-and-shoot, or pure fame.
+  return (p.catch_shoot_3pt >= 75 || (p.mid_range >= 80 && p.catch_shoot_3pt >= 60) || (p.clout || 0) >= 85);
+}
 
 // Simulate one rack (5 balls): 4 regular (1pt) + 1 money ball (2pt).
 // `makeProb` is per-ball probability. Returns array of {ball, made, points}.
@@ -2801,7 +2814,7 @@ function finalizeSeason(playerId) {
   return { ...base, qualified: false, playoff_result: 'Missed Playoffs', age_changes: end.age_changes, year_settlement: end.year_settlement, retirement: end.retirement };
 }
 
-function simulatePlayoffGame(playerId) {
+function simulatePlayoffGame(playerId, halftimeMods = null) {
   const state = getLeagueState(playerId);
   if (state.current_phase !== 'playoffs') throw httpError(400, 'No active playoff series.');
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
@@ -2811,7 +2824,7 @@ function simulatePlayoffGame(playerId) {
   const higherIsHome = [1, 2, 5, 7].includes(gameInSeries);
   const playerIsHigher = (state.player_seed || 9) < (state.opponent_seed || 9);
   const isHome = higherIsHome ? playerIsHigher : !playerIsHigher;
-  const game = simulateGame(playerId, oppId, true, isHome);
+  const game = simulateGame(playerId, oppId, true, isHome, halftimeMods);
 
   let sw = state.series_wins, sl = state.series_losses;
   if (game.result === 'W') sw++; else sl++;
@@ -4218,6 +4231,42 @@ app.put('/api/player/:id/tactics', wrap((req) => {
   return { tactics_defense: defense, tactics_offense: offense };
 }));
 
+// Tactical analysis: opponent tendencies, expected tactic effects, last game review.
+app.get('/api/analysis/tactics/:id', wrap((req) => {
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const state = getLeagueState(playerId = req.params.id);
+  const opponentId = state.current_phase === 'playoffs' ? state.playoff_opponent : null;
+  // If we have a scheduled opponent, analyze them.
+  let opponent = null;
+  if (opponentId) {
+    const oStr = teamStrength(req.params.id, opponentId);
+    const oTeam = TEAMS[opponentId];
+    opponent = { name: oTeam?.name, abbr: oTeam?.abbr, strength: Math.round(oStr) };
+  }
+  // Last game review.
+  const last = db.prepare('SELECT * FROM game_logs WHERE player_id=? AND is_playoff=0 ORDER BY season_number DESC, game_number DESC LIMIT 1').get(req.params.id);
+  const lastReview = last ? {
+    game: last.game_number, result: last.result, score: `${last.team_score}-${last.opponent_score}`,
+    pts: last.pts, reb: last.reb, ast: last.ast,
+    tactics: { defense: p.tactics_defense || 'balanced', offense: p.tactics_offense || 'balanced' },
+  } : null;
+  // Expected effects for each tactic (what the coefficients actually do).
+  const defenseEffects = {
+    balanced: { oppScore: '×1.00', oppThree: '×1.00', comment: 'No adjustment.' },
+    lockdown_star: { oppScore: '×0.94', oppThree: '×1.25', comment: 'Opponent scoring −6%, but their 3pt attempts +25%.' },
+    protect_paint: { oppScore: '×0.95', oppThree: '×1.40', comment: 'Opponent scoring −5%, but their 3pt attempts +40%.' },
+    switch_everything: { oppScore: '×0.96', oppThree: '×1.00', assists: '×0.70', fatigue: '+5', comment: 'Opponent scoring −3%, their assists −30%, you tire faster.' },
+  };
+  const offenseEffects = {
+    balanced: { possessions: '±0', comment: 'No adjustment.' },
+    push_pace: { possessions: '+16', fatigue: '+5', comment: 'More possessions, both teams score more, you tire faster.' },
+    grind_halfcourt: { possessions: '−12', turnovers: '×0.80', fatigue: '−4', comment: 'Fewer possessions, fewer turnovers, less fatigue.' },
+    three_heavy: { threeAttempts: '×1.50', twoAttempts: '×0.90', comment: '50% more threes, 10% fewer twos.' },
+  };
+  return { opponent, last_review: lastReview, defense_effects: defenseEffects, offense_effects: offenseEffects };
+}));
+
 app.put('/api/player/:id/role', wrap((req) => {
   const valid = ['Ball-Dominant Creator', 'Off-Ball Finisher', 'Rim Protector', 'Two-Way Wing', '3-and-D Specialist', 'Point Forward', 'Stretch Big', 'Defensive Anchor'];
   const role = req.query.role;
@@ -4392,7 +4441,10 @@ app.get('/api/game/logs/:id', wrap((req) => {
 app.get('/api/season/state', wrap((req) => getLeagueState(req.query.player_id)));
 app.post('/api/season/advance-phase', wrap((req) => { advanceLeaguePhase(req.query.player_id); return getLeagueState(req.query.player_id); }));
 app.post('/api/season/finalize/:id', wrap((req) => finalizeSeason(req.params.id)));
-app.post('/api/season/playoff-game/:id', wrap((req) => simulatePlayoffGame(req.params.id)));
+app.post('/api/season/playoff-game/:id', wrap((req) => {
+  const mods = req.query.halftime ? JSON.parse(decodeURIComponent(req.query.halftime)) : null;
+  return simulatePlayoffGame(req.params.id, mods);
+}));
 app.get('/api/season/schedule/:teamId', wrap((req) => {
   const teamId = Number(req.params.teamId);
   const sched = generateSeasonSchedule(teamId, req.query.player_id);
