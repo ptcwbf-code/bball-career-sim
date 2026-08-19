@@ -762,9 +762,47 @@ async function renderRetired(m) {
         <h3 class="text-sm font-semibold text-gray-300 mb-3">🌅 Second Life</h3>
         <div id="second-life"></div>
       </div>
+      <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-300 mb-3">👥 People in Your Life</h3>
+        <p class="text-xs text-faint mb-3">The people who shaped your journey — and how you shaped them.</p>
+        <div id="retirement-npcs"><p class="text-muted text-sm">Loading…</p></div>
+      </div>
       <button class="btn-secondary" onclick="switchTab('career')">View Full Career →</button>
     </div>`;
   loadSecondLife();
+  loadRetirementNPCs();
+}
+
+async function loadRetirementNPCs() {
+  const el = $('#retirement-npcs'); if (!el) return;
+  try {
+    const r = await api(`/player/${S.playerId}/retirement-npcs`);
+    const npcs = r.npcs || [];
+    if (!npcs.length) { el.innerHTML = '<p class="text-muted text-sm">No one in your circle. You walked this road alone.</p>'; return; }
+    const typeIcon = { family: '👪', partner: '💞', friend: '🤝', mentor: '🧭', agent: '📄', rival: '⚔️', protege: '🌱' };
+    const endings = {
+      partner: { married: 'Still together. Still in love.', active: 'Together, through everything.', strained: 'Together, but the distance is growing.', ended: 'Went separate ways.' },
+      family: { active: 'Still close. Still calls every week.', strained: 'The relationship cooled over the years.' },
+      friend: { active: 'Lifelong friends — the kind that don\'t need words.', strained: 'Drifted apart, as old friends sometimes do.', ended: 'Lost touch. Some bonds don\'t survive fame.' },
+      mentor: { active: 'Still a phone call away. Still has wisdom to share.', strained: 'The relationship faded after he retired.' },
+      rival: { active: 'Mutual respect. You made each other better.', strained: 'The rivalry never became friendship.' },
+      protege: { active: 'Your protege carries your legacy forward.', strained: 'You grew apart, but the lessons stuck.' },
+      agent: { active: 'Still managing your brand.', strained: 'Parted ways after the last contract negotiation.', ended: 'Fired. Found someone better.' },
+    };
+    el.innerHTML = npcs.map(n => {
+      const meta = [n.age ? `${n.age}岁` : '', n.trait, n.job].filter(Boolean).join(' · ');
+      const ending = endings[n.type]?.[n.status] || (n.bond >= 60 ? 'A bond that lasted.' : n.bond >= 40 ? 'In your life, in their own way.' : 'Drifted into the background.');
+      const shared = (n.shared || []).slice(-2);
+      return `<div class="py-2 border-b border-bg-border last:border-0">
+        <div class="flex items-center justify-between">
+          <span class="text-sm text-white">${typeIcon[n.type]||'👤'} ${esc(n.name)}${meta?` <span class="text-xs text-faint">· ${esc(meta)}</span>`:''}</span>
+          <span class="mono text-xs ${n.bond>=60?'text-good':n.bond>=40?'text-warn':'text-bad'}">${n.bond}</span>
+        </div>
+        <p class="text-xs text-faint italic mt-0.5">${ending}</p>
+        ${shared.length?`<p class="text-[10px] text-faint mt-0.5 pl-4">${shared.map(s=>'…'+s.slice(-40)).join(' · ')}</p>`:''}
+      </div>`;
+    }).join('');
+  } catch(e) { el.innerHTML = '<p class="text-muted text-sm">Couldn\'t load your circle.</p>'; }
 }
 
 async function loadSecondLife() {

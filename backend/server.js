@@ -1791,11 +1791,13 @@ function maybeDevelop(playerId) {
 }
 
 function maybeCareerEvent(playerId) {
-  // Story mode surfaces more of the off-court narrative.
   const mode = getLeagueState(playerId).game_mode || 'classic';
-  if (Math.random() >= (mode === 'story' ? 0.10 : 0.05)) return null;
-  const state = getLeagueState(playerId);
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  const flags = new Set(JSON.parse(p.flags || '[]'));
+  let baseChance = mode === 'story' ? 0.10 : 0.05;
+  if (flags.has('public_wedding')) baseChance *= 1.4; // celebrity life draws more attention
+  if (Math.random() >= baseChance) return null;
+  const state = getLeagueState(playerId);
   const candidates = CAREER_EVENTS.filter(e => !e.min_experience || (p.experience || 0) >= e.min_experience);
   if (!candidates.length) return null;
   const ev = candidates.find(e => e.id === weightedChoice(Object.fromEntries(candidates.map(e => [e.id, e.weight || 1]))));
@@ -3539,7 +3541,7 @@ const LIFE_EVENTS = [
     choices: [
       { text: { en: "Make time — this one matters.", zh: "挤出时间——这个人值得。" }, tone: 'commit', effects: { morale: [1, 3] }, bond: 10, next: 'proposal' },
       { text: { en: "Keep it casual for now.", zh: "先保持轻松，不急着定义。" }, tone: 'casual', effects: { morale: [0, 2] }, bond: 2 },
-      { text: { en: "End it cleanly before it gets complicated.", zh: "在变得复杂之前，体面地结束。" }, tone: 'end', effects: { morale: [-4, -1] }, bond: -30, status: 'ended' },
+      { text: { en: "End it cleanly before it gets complicated.", zh: "在变得复杂之前，体面地结束。" }, tone: 'end', effects: { morale: [-4, -1] }, bond: -30, status: 'ended', set_flag: 'ended_relationship' },
     ] },
   { id: 'proposal', type: 'partner',
     question: { en: "You're ready to settle down. Do you propose?", zh: "你准备好安定了。要求婚吗？" },
@@ -3551,7 +3553,7 @@ const LIFE_EVENTS = [
     question: { en: "The wedding is planned. A quiet ceremony, or a big media event?", zh: "婚礼已经排上了日程。办一场安静的仪式，还是公开的媒体盛宴？" },
     choices: [
       { text: { en: "Private ceremony — just family.", zh: "私密仪式——只有家人。" }, tone: 'private', effects: { morale: [2, 4] }, attr_effects: { composure: [1, 3] }, bond: 8, status: 'married', next: 'kids' },
-      { text: { en: "Go public — a celebrity wedding.", zh: "公开办——一场名人婚礼。" }, tone: 'public', effects: { fan_base: [4, 8], clout: [1, 3], wealth: [-3, -1] }, bond: 4, status: 'married', next: 'kids' },
+      { text: { en: "Go public — a celebrity wedding.", zh: "公开办——一场名人婚礼。" }, tone: 'public', effects: { fan_base: [4, 8], clout: [1, 3], wealth: [-3, -1] }, bond: 4, status: 'married', next: 'kids', set_flag: 'public_wedding' },
     ] },
   { id: 'kids', type: 'partner',
     question: { en: "Your partner brings up starting a family. How do you feel?", zh: "伴侣提起了组建家庭的事。你怎么想？" },
@@ -3615,7 +3617,7 @@ const LIFE_EVENTS = [
     question: { en: "A grizzled veteran pulls you aside after practice and says you have 'it' — and wants to teach you the rest.", zh: "一位身经百战的老将训练后把你拉到一边，说你有'那种东西'——他想把剩下的都教给你。" },
     choices: [
       { text: { en: "Take the mentorship.", zh: "接受这份指导。" }, tone: 'accept', effects: { morale: [1, 3] }, bond: 8, next: 'mentor_wisdom' },
-      { text: { en: "You've got this on your own.", zh: "你自己能行。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true },
+      { text: { en: "You've got this on your own.", zh: "你自己能行。" }, tone: 'decline', attr_effects: { work_ethic: [1, 2] }, decline: true, set_flag: 'declined_mentor' },
     ] },
   { id: 'mentor_wisdom', type: 'mentor',
     question: { en: "Your mentor is teaching you the nuances — but he also wants you to carry the torch when he's gone.", zh: "导师在教你那些微妙之处——但他也希望，当他离开后，你能接过火炬。" },
@@ -3631,7 +3633,7 @@ const LIFE_EVENTS = [
     ] },
 
   // --- Agent chain ---
-  { id: 'meet_agent', type: 'agent', intro: true, min_experience: 1,
+  { id: 'meet_agent', type: 'agent', intro: true, min_experience: 1, blocked_by: 'declined_mentor',
     names: ['Rich Paul', 'Agent Lee', 'Tommy the Fixer'],
     question: { en: "A slick agent wants to represent you — he promises bigger contracts but takes a hefty cut.", zh: "一位精明的经纪人想代理你——他承诺更大的合同，但要抽成不菲。" },
     choices: [
@@ -4724,8 +4726,27 @@ app.get('/api/league/compare/:id', wrap((req) => {
   return { ai, options: top.map(a => ({ id: a.id, name: a.name, position: a.position, overall: a.overall })) };
 }));
 
-app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
+app.get('/api/player/:id/retirement-npcs', wrap((req) => {
+  const rels = db.prepare('SELECT * FROM relationships WHERE player_id=?').all(req.params.id);
+  const lastEvents = db.prepare('SELECT relationship_id, description, choice_made FROM life_events WHERE player_id=? AND relationship_id IS NOT NULL ORDER BY id DESC').all(req.params.id);
+  const lastByRel = {};
+  for (const e of lastEvents) { if (!lastByRel[e.relationship_id]) lastByRel[e.relationship_id] = e; }
+  return {
+    npcs: rels.map(r => {
+      let meta = {}; try { meta = JSON.parse(r.meta || '{}'); } catch {}
+      const last = lastByRel[r.id];
+      return {
+        name: r.name, type: r.type, bond: r.bond, status: r.status,
+        age: meta.age, trait: meta.trait, job: meta.job,
+        shared: (meta.shared || []).slice(-3),
+        last_event: last?.description?.slice(0, 60) || null,
+        last_choice: last?.choice_made?.slice(0, 40) || null,
+      };
+    })
+  };
+}));
 
+app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
 // Static frontend
 app.use(express.static(FRONTEND_DIR));
 app.get('/', (req, res) => res.sendFile(path.join(FRONTEND_DIR, 'index.html')));
