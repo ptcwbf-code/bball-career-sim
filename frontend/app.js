@@ -1054,11 +1054,11 @@ async function renderAttributes(m) {
       <div class="grid md:grid-cols-2 gap-5">
         ${group('🔒 Static Physicals','Fixed at creation — cannot be changed.', a.static)}
         ${group('⚡ Athleticism','Trainable; declines with age.', a.athleticism)}
-        ${group('🎯 Scoring', null, a.scoring)}
+        ${group('🎯 Outside Scoring', null, a.outside)}
+        ${group('🏀 Inside Scoring', null, a.inside)}
         ${group('🛡️ Defense', null, a.defense)}
-        ${group('🏀 Rebounding','Drives board-crashing and second-chance opportunities.', a.rebounding)}
-        ${group('🎪 Playmaking', null, a.playmaking)}
-        ${group('🧠 Mental','Grows with experience.', a.mental)}
+        ${group('👁️ Playmaking', null, a.playmaking)}
+        ${group('🧠 Intangibles','Grows with experience.', a.mental)}
       </div>
       <div class="card p-5">
         <h3 class="text-sm font-semibold text-gray-300 mb-3">🎭 Tactical Role</h3>
@@ -1112,11 +1112,12 @@ async function loadCompare(aiId) {
     const p = S.player;
     const rows = [
       ['Overall', p.overall, r.ai.overall],
-      ['Scoring', avg(['first_step','finishing','mid_range','catch_shoot_3pt','pull_up_3pt','off_ball','drawing_fouls','free_throw']), r.ai.scoring],
-      ['Defense', avg(['perimeter_defense','help_defense','steal','rim_protection','box_out']), r.ai.defense],
+      ['Outside Scoring', avg(['mid_range','catch_shoot_3pt','pull_up_3pt','free_throw','off_ball']), r.ai.outside],
+      ['Inside Scoring', avg(['first_step','finishing','drawing_fouls','ball_security']), r.ai.inside],
+      ['Defense', avg(['perimeter_defense','help_defense','rim_protection','steal','box_out','rebounding']), r.ai.defense],
       ['Athleticism', avg(['vertical_jump','speed','lateral_quickness','strength','stamina']), r.ai.athleticism],
-      ['Playmaking', avg(['ball_security','pnr_vision','passing_accuracy']), r.ai.playmaking],
-      ['Mental', avg(['bbiq','clutch_factor','composure']), r.ai.mental],
+      ['Playmaking', avg(['passing_accuracy','pnr_vision']), r.ai.playmaking],
+      ['Intangibles', avg(['bbiq','clutch_factor','composure']), r.ai.mental],
     ];
     const diff = (a, b) => { const d = a - b; return d > 0 ? `<span class="text-good">+${d}</span>` : d < 0 ? `<span class="text-bad">${d}</span>` : '<span class="text-muted">0</span>'; };
     el.innerHTML = sel + `

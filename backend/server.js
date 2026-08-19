@@ -222,28 +222,36 @@ const ALL_TEAM_IDS = Object.keys(TEAMS).map(Number);
 // ------------------------------------------------------------
 const POSITION_PROFILES = {
   PG: { label: 'Point Guard', icon: '🎯', height_range: [1.83, 1.96], weight_range: [77, 93], base_points: 290,
-        aptitudes: { athleticism: 45, defense: 40, scoring: 55, playmaking: 65, mental: 55 } },
+        aptitudes: { athleticism: 45, defense: 35, outside: 60, inside: 45, playmaking: 65, mental: 50 } },
   SG: { label: 'Shooting Guard', icon: '🔥', height_range: [1.91, 2.03], weight_range: [84, 102], base_points: 280,
-        aptitudes: { athleticism: 45, defense: 40, scoring: 65, playmaking: 45, mental: 55 } },
+        aptitudes: { athleticism: 45, defense: 40, outside: 65, inside: 50, playmaking: 40, mental: 50 } },
   SF: { label: 'Small Forward', icon: '⚡', height_range: [1.98, 2.08], weight_range: [93, 112], base_points: 275,
-        aptitudes: { athleticism: 50, defense: 50, scoring: 55, playmaking: 35, mental: 55 } },
+        aptitudes: { athleticism: 50, defense: 50, outside: 50, inside: 50, playmaking: 35, mental: 50 } },
   PF: { label: 'Power Forward', icon: '💪', height_range: [2.03, 2.13], weight_range: [102, 122], base_points: 270,
-        aptitudes: { athleticism: 55, defense: 60, scoring: 45, playmaking: 25, mental: 55 } },
+        aptitudes: { athleticism: 55, defense: 60, outside: 35, inside: 55, playmaking: 25, mental: 50 } },
   C:  { label: 'Center', icon: '🏔️', height_range: [2.08, 2.21], weight_range: [109, 136], base_points: 265,
-        aptitudes: { athleticism: 55, defense: 70, scoring: 35, playmaking: 20, mental: 55 } },
+        aptitudes: { athleticism: 55, defense: 70, outside: 25, inside: 50, playmaking: 20, mental: 50 } },
 };
 
 const ATTRIBUTE_CATEGORIES = {
+  outside: { label: 'Outside Scoring', icon: '🎯',
+    desc: 'Shooting from mid-range and beyond, plus free throws.',
+    attrs: ['mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'free_throw', 'off_ball'] },
+  inside: { label: 'Inside Scoring', icon: '🏀',
+    desc: 'Driving to the basket, finishing through contact, drawing fouls.',
+    attrs: ['first_step', 'finishing', 'drawing_fouls', 'ball_security'] },
   athleticism: { label: 'Athleticism', icon: '⚡',
+    desc: 'Raw physical tools — speed, strength, leaping, endurance.',
     attrs: ['vertical_jump', 'speed', 'lateral_quickness', 'strength', 'core_stability', 'stamina', 'durability'] },
-  scoring: { label: 'Scoring', icon: '🎯',
-    attrs: ['first_step', 'finishing', 'mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'off_ball', 'drawing_fouls', 'free_throw'] },
   playmaking: { label: 'Playmaking', icon: '👁️',
-    attrs: ['ball_security', 'pnr_vision', 'passing_accuracy'] },
+    desc: 'Running the offense — passing, court vision, pick-and-roll decisions.',
+    attrs: ['passing_accuracy', 'pnr_vision'] },
   defense: { label: 'Defense', icon: '🛡️',
-    attrs: ['perimeter_defense', 'help_defense', 'steal', 'rim_protection', 'box_out'] },
-  mental: { label: 'Basketball IQ', icon: '🧠',
-    attrs: ['bbiq', 'clutch_factor', 'work_ethic', 'leadership', 'composure'] },
+    desc: 'Guarding the ball, protecting the rim, disrupting passing lanes.',
+    attrs: ['perimeter_defense', 'help_defense', 'rim_protection', 'steal', 'box_out', 'rebounding'] },
+  mental: { label: 'Intangibles', icon: '🧠',
+    desc: 'Basketball IQ, clutch, composure, work ethic, leadership.',
+    attrs: ['bbiq', 'clutch_factor', 'composure', 'work_ethic', 'leadership'] },
 };
 
 // Default on-court role per position — ball-handlers get playmaking-friendly roles.
@@ -332,8 +340,8 @@ function calculatePointPool(position, height, weight, luckBonus = null) {
   const totalPoints = base + heightBonus + weightBonus + luck;
 
   const aptitudes = { ...profile.aptitudes };
-  if (hDev > 0.3) { aptitudes.defense += 3; aptitudes.athleticism += 2; aptitudes.scoring -= 2; }
-  else if (hDev < -0.3) { aptitudes.scoring += 3; aptitudes.playmaking += 2; aptitudes.defense -= 2; }
+  if (hDev > 0.3) { aptitudes.defense += 3; aptitudes.athleticism += 2; aptitudes.inside -= 2; aptitudes.outside -= 2; }
+  else if (hDev < -0.3) { aptitudes.outside += 3; aptitudes.inside += 2; aptitudes.playmaking += 2; aptitudes.defense -= 2; }
 
   return { total_points: totalPoints, base, height_bonus: heightBonus, weight_bonus: weightBonus,
            luck_bonus: luck, aptitudes, height_deviation: round2(hDev), weight_deviation: round2(wDev) };
@@ -498,12 +506,13 @@ function weightedPick(pop, weights) {
 }
 
 function calculateOverallRating(player) {
-  const scoring = (player.first_step + player.finishing + player.mid_range + player.catch_shoot_3pt + player.pull_up_3pt) / 5;
-  const playmaking = (player.ball_security + player.pnr_vision + player.passing_accuracy) / 3;
-  const defense = (player.perimeter_defense + player.help_defense + player.steal + player.rim_protection + player.box_out) / 5;
+  const outside = (player.mid_range + player.catch_shoot_3pt + player.pull_up_3pt + player.free_throw + player.off_ball) / 5;
+  const inside = (player.first_step + player.finishing + player.drawing_fouls + player.ball_security) / 4;
+  const playmaking = (player.passing_accuracy + player.pnr_vision) / 2;
+  const defense = (player.perimeter_defense + player.help_defense + player.rim_protection + player.steal + player.box_out + player.rebounding) / 6;
   const athleticism = (player.vertical_jump + player.speed + player.lateral_quickness + player.strength + player.stamina) / 5;
   const mental = (player.bbiq + player.clutch_factor + player.composure) / 3;
-  return clamp(Math.round(scoring * 0.35 + playmaking * 0.15 + defense * 0.2 + athleticism * 0.2 + mental * 0.1), 25, 95);
+  return clamp(Math.round(outside * 0.15 + inside * 0.20 + playmaking * 0.15 + defense * 0.20 + athleticism * 0.20 + mental * 0.10), 25, 95);
 }
 
 // ------------------------------------------------------------
@@ -4163,15 +4172,14 @@ app.delete('/api/player/:id', wrap((req) => {
 
 app.get('/api/player/:id/attributes', wrap((req) => {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
-  return {
+  const result = {
     static: { height: p.height, weight: p.weight, wingspan: p.wingspan, standing_reach: p.standing_reach, hand_size: p.hand_size, frame_build: p.frame_build, body_fat_pct: p.body_fat_pct },
-    athleticism: { vertical_jump: p.vertical_jump, speed: p.speed, lateral_quickness: p.lateral_quickness, strength: p.strength, core_stability: p.core_stability, stamina: p.stamina, durability: p.durability },
-    defense: { perimeter_defense: p.perimeter_defense, help_defense: p.help_defense, steal: p.steal, rim_protection: p.rim_protection, box_out: p.box_out },
-    rebounding: { rebounding: p.rebounding },
-    scoring: { first_step: p.first_step, finishing: p.finishing, mid_range: p.mid_range, catch_shoot_3pt: p.catch_shoot_3pt, pull_up_3pt: p.pull_up_3pt, off_ball: p.off_ball, drawing_fouls: p.drawing_fouls, free_throw: p.free_throw },
-    playmaking: { ball_security: p.ball_security, pnr_vision: p.pnr_vision, passing_accuracy: p.passing_accuracy },
-    mental: { bbiq: p.bbiq, clutch_factor: p.clutch_factor, work_ethic: p.work_ethic, leadership: p.leadership, composure: p.composure },
   };
+  for (const [key, cat] of Object.entries(ATTRIBUTE_CATEGORIES)) {
+    result[key] = {};
+    for (const attr of cat.attrs) result[key][attr] = p[attr] ?? 50;
+  }
+  return result;
 }));
 
 app.get('/api/player/:id/season-stats', wrap((req) => {
@@ -4654,7 +4662,8 @@ app.get('/api/league/compare/:id', wrap((req) => {
   const o = target.overall;
   const ai = {
     name: target.name, position: target.position, overall: o,
-    scoring: clamp(Math.round(o * 0.95 + gauss(0, 5)), 40, 99),
+    outside: clamp(Math.round(o * 0.92 + gauss(0, 5)), 35, 99),
+    inside: clamp(Math.round(o * 0.95 + gauss(0, 5)), 40, 99),
     defense: clamp(Math.round(o * 0.9 + gauss(0, 6)), 35, 99),
     athleticism: clamp(Math.round(o * 0.92 + gauss(0, 5)), 35, 99),
     playmaking: clamp(Math.round(o * 0.85 + gauss(0, 6)), 30, 99),
