@@ -1798,7 +1798,11 @@ function maybeCareerEvent(playerId) {
   if (flags.has('public_wedding')) baseChance *= 1.4; // celebrity life draws more attention
   if (Math.random() >= baseChance) return null;
   const state = getLeagueState(playerId);
-  const candidates = CAREER_EVENTS.filter(e => !e.min_experience || (p.experience || 0) >= e.min_experience);
+  const candidates = CAREER_EVENTS.filter(e => {
+    if (e.min_experience && (p.experience || 0) < e.min_experience) return false;
+    if (e.max_experience && (p.experience || 0) > e.max_experience) return false;
+    return true;
+  });
   if (!candidates.length) return null;
   const ev = candidates.find(e => e.id === weightedChoice(Object.fromEntries(candidates.map(e => [e.id, e.weight || 1]))));
   if (!ev) return null;
@@ -2595,12 +2599,16 @@ function chooseSecondLife(playerId, path) {
   // Financial ending: your money decisions echo into retirement. A broke retiree
   // limps away with a stain on their legacy; a wealthy one compounds it.
   let financialEnding = null;
-  if ((p.wealth ?? 0) < 5) {
-    legacyScore = round1(Math.max(0, legacyScore - 10));
-    financialEnding = 'You retired nearly broke — the money never outran the lifestyle.';
-  } else if ((p.wealth ?? 0) >= 50) {
+  const w = p.wealth ?? 0;
+  if (w < 2) {
+    legacyScore = round1(Math.max(0, legacyScore - 15));
+    financialEnding = 'You retired nearly broke. The money — all those millions — slipped through your fingers like water. Within two years, you were selling memorabilia to cover the mortgage. It\'s the story nobody wants to tell, but 60% of NBA players live it.';
+  } else if (w < 10) {
+    legacyScore = round1(Math.max(0, legacyScore - 5));
+    financialEnding = 'You retired with modest savings. Not broke, but not secure either. The lifestyle took more than it should have. You\'d better make this second career count.';
+  } else if (w >= 50) {
     legacyScore = round1(Math.min(100, legacyScore + 5));
-    financialEnding = 'You retired wealthy, and the fortune kept compounding.';
+    financialEnding = 'You retired wealthy. Smart investments, disciplined spending, good advisors — your money kept working after you stopped. The fortune will outlast you.';
   }
   db.prepare('UPDATE players SET second_life=?, legacy_score=?, fan_base=MIN(100,fan_base+?), wealth=wealth+? WHERE id=?').run(path, legacyScore, fameGain, wealthGain, playerId);
   db.prepare('INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)')
@@ -3239,6 +3247,38 @@ const CAREER_EVENTS = [
   { id: 'endorsement_break', title: { en: 'Endorsement Falls Through', zh: '代言告吹' }, tone: 'negative', weight: 2, min_experience: 1,
     text: { en: 'A major endorsement deal collapsed at the last minute.', zh: '一单重要代言在最后一刻谈崩了。' },
     effects: { wealth: [-5, -2], morale: [-5, -1] } },
+
+  // --- Themed events: filtered by experience/phase in maybeCareerEvent ---
+  // Rookie year: the city meets you
+  { id: 'rookie_city', title: { en: 'The City Welcomes You', zh: '城市接纳你' }, tone: 'positive', weight: 4, max_experience: 1,
+    text: { en: 'A local school invited you to speak. The kids mobbed you. You feel like you belong here now.', zh: '一所本地学校请你去演讲。孩子们蜂拥而上。你觉得自己已经属于这里了。' },
+    effects: { fan_base: [4, 10], morale: [3, 6] } },
+  { id: 'rookie_lost', title: { en: 'Lost in the City', zh: '迷失在城市里' }, tone: 'negative', weight: 3, max_experience: 1,
+    text: { en: 'You got hopelessly lost driving home from practice. Everything here still feels foreign.', zh: '训练完开车回家迷了路。这里的一切对你来说还是陌生的。' },
+    effects: { morale: [-6, -2] }, attr_effects: { composure: [-2, -1] } },
+  { id: 'rookie_first_fan', title: { en: 'First Autograph', zh: '第一个签名' }, tone: 'positive', weight: 4, max_experience: 1,
+    text: { en: 'A kid recognized you at the grocery store and asked for your autograph. You signed his notebook. You\'re somebody now.', zh: '一个孩子在超市认出了你，找你要签名。你签在了他的本子上。你终于成名了。' },
+    effects: { fan_base: [2, 5], morale: [2, 5] } },
+  // Late career: legacy and farewell
+  { id: 'legacy_speech', title: { en: 'The Speech', zh: '那场演讲' }, tone: 'positive', weight: 3, min_experience: 10,
+    text: { en: 'You gave a speech at the team\'s end-of-year dinner. Players you\'d never met came up afterward and said it meant something.', zh: '你在球队年终晚宴上发表了演讲。一些从未交集的球员事后走过来说，你的演讲对他们有意义。' },
+    effects: { clout: [3, 7], fan_base: [2, 5] }, attr_effects: { leadership: [1, 3] } },
+  { id: 'legacy_passing', title: { en: 'Passing the Torch', zh: '传火炬' }, tone: 'positive', weight: 3, min_experience: 10,
+    text: { en: 'A young player on your team asked if he could study your pre-game routine. You said yes, and something clicked — you weren\'t just playing for yourself anymore.', zh: '队里一个年轻球员问能不能研究你的赛前习惯。你答应了，那一刻有什么东西不一样了——你不再只为自己打球了。' },
+    effects: { morale: [2, 5] }, attr_effects: { leadership: [1, 2] } },
+  { id: 'legacy_body', title: { en: 'The Body Keeps Score', zh: '身体记住了代价' }, tone: 'negative', weight: 3, min_experience: 10,
+    text: { en: 'Your knees swelled up after the last game. The trainer said it\'s normal for your age. Normal doesn\'t mean painless.', zh: '上一场比赛后膝盖肿了。训练师说以你的年龄这很正常。正常不代表不疼。' },
+    effects: { morale: [-4, -1] }, attr_effects: { durability: [-2, -1] } },
+  // Championship contender: pressure year
+  { id: 'pressure_insomnia', title: { en: 'Restless Nights', zh: '夜不能寐' }, tone: 'negative', weight: 3, min_experience: 3,
+    text: { en: 'You couldn\'t sleep after the last loss. The championship window is closing and everyone knows it.', zh: '上一场失利后你失眠了。冠军窗口在关闭，所有人都知道。' },
+    effects: { morale: [-5, -2] }, attr_effects: { composure: [-2, -1] } },
+  { id: 'pressure_team_meeting', title: { en: 'Players-Only Meeting', zh: '球员会议' }, tone: 'positive', weight: 3, min_experience: 3,
+    text: { en: 'Your team held a players-only meeting after a bad stretch. No coaches, no cameras. Just honesty.', zh: '连败之后，球队开了一次没有教练、没有摄像机的球员会议。只有实话。' },
+    effects: { morale: [3, 6] }, attr_effects: { leadership: [1, 2] } },
+  { id: 'pressure_media', title: { en: 'The Media Circus', zh: '媒体围堵' }, tone: 'negative', weight: 2, min_experience: 3,
+    text: { en: 'The media has been relentless. Every loss gets dissected on every show. You turned off your phone for a week.', zh: '媒体无孔不入。每场失利都被各个节目反复剖析。你关了一周手机。' },
+    effects: { fan_base: [-3, -1], morale: [-3, -1] } },
 ];
 
 const MEDIA_SCENARIOS = [
@@ -3649,7 +3689,7 @@ const LIFE_EVENTS = [
 
   // --- Rival chain ---
   { id: 'meet_rival', type: 'rival', intro: true, min_experience: 0,
-    names: ['The Next Big Thing', 'Your Draft-Mate', 'The Golden Boy'],
+    names: ['DeMarcus Hayes', 'Jalen Carter', 'Kai Mitchell', 'Andre Washington', 'Terrence Brooks'],
     question: { en: "A player from your draft class is being crowned the future of the league — and he's taken shots at you in interviews.", zh: "和你同届的一个新秀被捧成联盟的未来——而且他在采访里对你冷嘲热讽。" },
     choices: [
       { text: { en: "Make it personal.", zh: "把这事放在心上。" }, tone: 'fuel', effects: { morale: [1, 3] }, attr_effects: { work_ethic: [1, 2] }, bond: -5, next: 'rival_clash' },
@@ -3690,7 +3730,7 @@ const LIFE_EVENTS = [
 
   // --- Mentor (you become the mentor) ---
   { id: 'mentor_protege', type: 'protege', intro: true, min_experience: 3, min_leadership: 70,
-    names: ['Jalen', 'Marcus', 'The Kid', 'Devon'],
+    names: ['Jalen Brooks', 'Marcus Chen', 'Devon Harris', 'Kai Thompson', 'Andre Williams'],
     question: { en: "A rookie keeps studying your game and asking for advice. The coaches think he could be special — if someone shows him the ropes.", zh: "一个新秀总在研究你的打法，不断向你请教。教练们觉得，只要有人带，他可能成气候。" },
     choices: [
       { text: { en: "Take him under your wing.", zh: "把他收在麾下，亲自带。" }, tone: 'accept', effects: { morale: [1, 3] }, attr_effects: { leadership: [1, 2] }, bond: 8, next: 'protege_growth' },

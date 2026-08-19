@@ -833,7 +833,9 @@ async function chooseSecondLife(path) {
   try {
     const r = await api(`/player/${S.playerId}/second-life?path=${encodeURIComponent(path)}`, { method:'POST' });
     await refreshPlayer();
-    toast(`Second life: ${r.icon} ${r.label} — legacy ${r.legacy_score}%`,'success');
+    let msg = `Second life: ${r.icon} ${r.label} — legacy ${r.legacy_score}%`;
+    if (r.financial_ending) msg += `\n\n💰 ${r.financial_ending}`;
+    toast(msg, 'success');
     renderRetired($('#main'));
   } catch(e) { toast('Failed: '+e.message,'error'); }
 }
@@ -871,7 +873,7 @@ async function renderDashboard(m) {
   const weekendCard = p.pending_weekend ? `
       <div class="card p-5 border-accent/40 bg-accent/5">
         <h3 class="text-sm font-semibold text-accent mb-1">🌟 All-Star Weekend</h3>
-        <p class="text-xs text-muted mb-3">The league invited you to the All-Star events. Eligibility: dunk (vert≥75 or finishing≥75 or clout≥85), 3pt (catch_shoot≥75 or mid_range≥80 or clout≥85).</p>
+        <p class="text-xs text-muted mb-3">The league invited you to the All-Star events. You can enter the dunk contest, the three-point contest, or skip.</p>
         <div class="flex gap-2 flex-wrap">
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="resolveWeekend('dunk')">🛫 Dunk Contest</button>
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="resolveWeekend('three')">🎯 Three-Point Contest</button>
@@ -1369,8 +1371,8 @@ async function resolveWeekend(choice) {
     return;
   }
   const opts = await api(`/season/allstar-weekend-options/${S.playerId}`);
-  if (choice === 'dunk' && !opts.dunk_eligible) { toast('You need vertical≥55, finishing≥50, or clout≥70 to enter the dunk contest.','warn'); return; }
-  if (choice === 'three' && !opts.three_eligible) { toast('You need catch_shoot_3pt≥50 or clout≥70 to enter the 3-point contest.','warn'); return; }
+  if (choice === 'dunk' && !opts.dunk_eligible) { toast('You\'re not quite ready for the dunk contest yet — train your athleticism first.','warn'); return; }
+  if (choice === 'three' && !opts.three_eligible) { toast('Your shooting isn\'t sharp enough for the three-point contest — keep working on it.','warn'); return; }
   if (choice === 'dunk') startDunkContest(opts);
   else startThreeContest(opts);
 }
