@@ -1912,7 +1912,7 @@ const DUNK_DISTANCES = [
 ];
 
 // Eligibility: dunk needs vertical_jump>=55 or finishing>=50 or clout>=70.
-function dunkEligible(p) { return (p.vertical_jump >= 48 || p.finishing >= 45 || (p.clout || 0) >= 70); }
+function dunkEligible(p) { return (p.vertical_jump >= 75 || p.finishing >= 75 || (p.clout || 0) >= 85); }
 
 // Score one dunk attempt: returns 40-50.
 function scoreDunk(playerOverall, dunkDiff, distPenalty, attempt) {
@@ -1965,7 +1965,7 @@ const THREE_RACKS = [
 ];
 
 // Eligibility: 3pt needs catch_shoot_3pt>=50 or clout>=70.
-function threeEligible(p) { return (p.catch_shoot_3pt >= 45 || (p.clout || 0) >= 70); }
+function threeEligible(p) { return (p.catch_shoot_3pt >= 75 || p.mid_range >= 80 || (p.clout || 0) >= 85); }
 
 // Simulate one rack (5 balls): 4 regular (1pt) + 1 money ball (2pt).
 // `makeProb` is per-ball probability. Returns array of {ball, made, points}.

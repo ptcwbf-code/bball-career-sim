@@ -833,7 +833,7 @@ async function renderDashboard(m) {
   const weekendCard = p.pending_weekend ? `
       <div class="card p-5 border-accent/40 bg-accent/5">
         <h3 class="text-sm font-semibold text-accent mb-1">🌟 All-Star Weekend</h3>
-        <p class="text-xs text-muted mb-3">The league invited you to the All-Star events. Eligibility: dunk (vert≥55 or finishing≥50 or clout≥70), 3pt (catch_shoot≥50 or clout≥70).</p>
+        <p class="text-xs text-muted mb-3">The league invited you to the All-Star events. Eligibility: dunk (vert≥75 or finishing≥75 or clout≥85), 3pt (catch_shoot≥75 or mid_range≥80 or clout≥85).</p>
         <div class="flex gap-2 flex-wrap">
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="resolveWeekend('dunk')">🛫 Dunk Contest</button>
           <button class="btn-secondary !py-1.5 !px-3 text-xs" onclick="resolveWeekend('three')">🎯 Three-Point Contest</button>
@@ -1581,9 +1581,9 @@ async function renderGame(m) {
           <h3 class="text-lg font-bold text-white mb-1">#${st.player_seed||'?'} ${S.player.team_name} vs #${st.opponent_seed||'?'} ${opp?.name||'Opponent'}</h3>
           <p class="text-xs text-faint mb-3">Game ${gameN} · ${venue}</p>
           <div class="flex justify-center items-center gap-6 mb-3">
-            <div class="text-center"><div class="text-4xl font-black text-accent">${st.series_wins||0}</div><div class="text-[10px] text-muted">${S.player.team_abbr}</div></div>
+            <div class="text-center"><div class="text-4xl font-black text-accent" id="pg-series-wins">${st.series_wins||0}</div><div class="text-[10px] text-muted">${S.player.team_abbr}</div></div>
             <span class="text-muted font-bold text-xl">—</span>
-            <div class="text-center"><div class="text-4xl font-black text-white">${st.series_losses||0}</div><div class="text-[10px] text-muted">${opp?.abbr||'OPP'}</div></div>
+            <div class="text-center"><div class="text-4xl font-black text-white" id="pg-series-losses">${st.series_losses||0}</div><div class="text-[10px] text-muted">${opp?.abbr||'OPP'}</div></div>
           </div>
           <p class="text-sm text-muted mb-4">Best of 7 — first to 4 wins.</p>
           <button class="btn-primary text-lg px-8" id="g-pg">🏀 Play Playoff Game</button>
@@ -2309,51 +2309,72 @@ function gameResult(r) {
   const q = r.quarters || { team: [], opp: [] };
   const tb = r.team_box || {}, ob = r.opp_box || {};
   const box = (l,v,c)=>`<div class="card p-3 text-center"><div class="text-xl font-black ${c}">${v}</div><div class="text-[10px] text-muted">${l}</div></div>`;
+  // One-line highlight
+  const highlights = [];
+  if (b.pts >= 40) highlights.push(`Dropped ${b.pts} points!`);
+  else if (b.pts >= 30) highlights.push(`Led the way with ${b.pts} points.`);
+  if (b.reb >= 15) highlights.push(`Dominated the glass with ${b.reb} boards.`);
+  if (b.ast >= 12) highlights.push(`Dished out ${b.ast} dimes.`);
+  if (b.blk >= 5) highlights.push(`Swatted ${b.blk} shots.`);
+  if (b.stl >= 4) highlights.push(`Had ${b.stl} steals.`);
+  if (r.records_broken?.length) highlights.push('🏆 NEW ALL-TIME RECORD!');
+  if (r.personal_record) highlights.push('📈 New career high!');
+  if (!highlights.length && b.pts < 8) highlights.push('Quiet night — held to just ' + b.pts + ' points.');
+  else if (!highlights.length) highlights.push('A solid outing.');
+  const highlight = highlights[0];
+
   return `
     <div class="card p-5 fade">
-      <div class="flex items-center justify-between mb-3">
+      <!-- Top summary: always visible -->
+      <div class="flex items-center justify-between mb-2">
         <h3 class="text-lg font-bold text-white">Game ${r.game_number} vs ${r.opponent}</h3>
         <span class="text-2xl font-black ${r.result==='W'?'text-good':'text-bad'}">${r.result}</span>
       </div>
-      <div class="text-center text-3xl font-black text-white mb-4">${r.team_score} – ${r.opponent_score}${r.overtime?`<span class="text-accent text-lg align-middle ml-2">(${r.overtime}OT)</span>`:''}</div>
-
-      ${q.team?.length ? `
-      <table class="w-full text-xs text-center mb-4">
-        <thead><tr class="text-muted border-b border-bg-border">
-          <th class="text-left py-1 font-semibold"></th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th class="text-accent">T</th>
-        </tr></thead>
-        <tbody>
-          <tr><td class="text-left font-semibold text-white py-1">You</td>${q.team.map(v=>`<td class="mono text-white">${v}</td>`).join('')}<td class="mono font-bold text-accent">${r.team_score}</td></tr>
-          <tr><td class="text-left font-semibold text-white py-1">Opp</td>${q.opp.map(v=>`<td class="mono text-white">${v}</td>`).join('')}<td class="mono font-bold text-accent">${r.opponent_score}</td></tr>
-        </tbody>
-      </table>` : ''}
-
-      <div class="grid grid-cols-4 md:grid-cols-8 gap-2 mb-3">
-        ${box('MIN',r.minutes,'text-white')}${box('PTS',b.pts,'text-accent')}${box('REB',b.reb,'text-cyber')}${box('AST',b.ast,'text-purple-400')}
-        ${box('STL',b.stl,'text-good')}${box('BLK',b.blk,'text-bad')}${box('TOV',b.tov,'text-warn')}${box('PF',b.pf,'text-muted')}
+      <div class="text-center text-3xl font-black text-white mb-1">${r.team_score} – ${r.opponent_score}${r.overtime?`<span class="text-accent text-lg align-middle ml-2">(${r.overtime}OT)</span>`:''}</div>
+      <div class="flex justify-center gap-6 text-sm mb-2">
+        <span><b class="text-accent">${b.pts}</b> <span class="text-muted">PTS</span></span>
+        <span><b class="text-cyber">${b.reb}</b> <span class="text-muted">REB</span></span>
+        <span><b class="text-purple-400">${b.ast}</b> <span class="text-muted">AST</span></span>
+        <span><b class="text-good">${b.stl}</b> <span class="text-muted">STL</span></span>
+        <span><b class="text-bad">${b.blk}</b> <span class="text-muted">BLK</span></span>
       </div>
-      <div class="text-xs text-muted text-center mb-3">FG ${b.fgm}/${b.fga}${b.fga?` (${(b.fgm/b.fga*100).toFixed(1)}%)`:''} · 3PT ${b.tpm}/${b.tpa}${b.tpa?` (${(b.tpm/b.tpa*100).toFixed(1)}%)`:''} · FT ${b.ftm}/${b.fta}${b.fta?` (${(b.ftm/b.fta*100).toFixed(1)}%)`:''}</div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-        ${box('OREB',b.oreb||0,'text-white')}${box('DREB',b.dreb||0,'text-white')}${box('±',(r.plus_minus>0?'+':'')+r.plus_minus,'text-white')}${box('EFF',a.eff,'text-white')}
-      </div>
-      <div class="grid grid-cols-3 gap-2 mb-3">
-        ${box('PER',a.per,'text-accent')}${box('TS%',(a.ts_pct*100).toFixed(1)+'%','text-white')}${box('GmSc',a.game_score,'text-white')}
-      </div>
-
-      <div class="border-t border-bg-border pt-3">
-        <p class="text-[10px] text-muted uppercase tracking-wider mb-1 text-left">Team Comparison</p>
-        <table class="w-full text-xs text-center">
-          <thead><tr class="text-muted border-b border-bg-border"><th class="text-left py-1 font-semibold"></th><th>REB</th><th>AST</th><th>TOV</th><th>FG</th><th>3P</th></tr></thead>
-          <tbody>
-            <tr><td class="text-left font-semibold text-white py-1">You</td><td class="mono text-white">${tb.reb??'—'}</td><td class="mono text-white">${tb.ast??'—'}</td><td class="mono text-white">${tb.tov??'—'}</td><td class="mono text-white">${tb.fgm??0}/${tb.fga??0}</td><td class="mono text-white">${tb.tpm??0}/${tb.tpa??0}</td></tr>
-            <tr><td class="text-left font-semibold text-white py-1">Opp</td><td class="mono text-white">${ob.reb??'—'}</td><td class="mono text-white">${ob.ast??'—'}</td><td class="mono text-white">${ob.tov??'—'}</td><td class="mono text-white">${ob.fgm??0}/${ob.fga??0}</td><td class="mono text-white">${ob.tpm??0}/${ob.tpa??0}</td></tr>
-          </tbody>
-        </table>
-      </div>
-      ${r.injury?`<div class="mt-3 p-3 rounded-lg bg-bad/10 border border-bad/30 text-bad text-sm">🏥 Injured: ${r.injury.type} — out ${r.injury.games} games</div>`:''}
-      ${r.fouled_out?`<div class="mt-3 p-3 rounded-lg bg-bad/10 border border-bad/30 text-bad text-sm">🚫 Fouled out (${b.pf} fouls)</div>`:''}
-      ${r.records_broken?.length?`<div class="mt-3 p-3 rounded-lg bg-accent/10 border border-accent/40 text-accent text-sm">🏆 NEW ALL-TIME RECORD: ${r.records_broken.map(x=>`${x.label} — ${x.achieved}`).join(' · ')}</div>`:''}
+      <p class="text-xs text-center text-faint italic mb-2">${highlight}</p>
+      ${r.injury?`<div class="p-2 rounded bg-bad/10 border border-bad/30 text-bad text-xs mb-2">🏥 Injured: ${r.injury.type} — out ${r.injury.games} games</div>`:''}
+      ${r.records_broken?.length?`<div class="p-2 rounded bg-accent/10 border border-accent/40 text-accent text-xs mb-2">🏆 NEW ALL-TIME RECORD: ${r.records_broken.map(x=>`${x.label} — ${x.achieved}`).join(' · ')}</div>`:''}
+      ${r.fouled_out?`<div class="p-2 rounded bg-bad/10 border border-bad/30 text-bad text-xs mb-2">🚫 Fouled out (${b.pf} fouls)</div>`:''}
       ${devEventNotice(r)}
+
+      <!-- Expandable details -->
+      <details class="mt-3">
+        <summary class="text-xs text-muted cursor-pointer hover:text-white mb-2">Show full box score, advanced stats & team comparison</summary>
+        ${q.team?.length ? `
+        <table class="w-full text-xs text-center mb-4 mt-2">
+          <thead><tr class="text-muted border-b border-bg-border">
+            <th class="text-left py-1 font-semibold"></th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th class="text-accent">T</th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="text-left font-semibold text-white py-1">You</td>${q.team.map(v=>`<td class="mono text-white">${v}</td>`).join('')}<td class="mono font-bold text-accent">${r.team_score}</td></tr>
+            <tr><td class="text-left font-semibold text-white py-1">Opp</td>${q.opp.map(v=>`<td class="mono text-white">${v}</td>`).join('')}<td class="mono font-bold text-accent">${r.opponent_score}</td></tr>
+          </tbody>
+        </table>` : ''}
+        <div class="text-xs text-muted text-center mb-3">FG ${b.fgm}/${b.fga}${b.fga?` (${(b.fgm/b.fga*100).toFixed(1)}%)`:''} · 3PT ${b.tpm}/${b.tpa}${b.tpa?` (${(b.tpm/b.tpa*100).toFixed(1)}%)`:''} · FT ${b.ftm}/${b.fta}${b.fta?` (${(b.ftm/b.fta*100).toFixed(1)}%)`:''}</div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+          ${box('OREB',b.oreb||0,'text-white')}${box('DREB',b.dreb||0,'text-white')}${box('±',(r.plus_minus>0?'+':'')+r.plus_minus,'text-white')}${box('EFF',a.eff,'text-white')}
+        </div>
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          ${box('PER',a.per,'text-accent')}${box('TS%',(a.ts_pct*100).toFixed(1)+'%','text-white')}${box('GmSc',a.game_score,'text-white')}
+        </div>
+        <div class="border-t border-bg-border pt-3">
+          <p class="text-[10px] text-muted uppercase tracking-wider mb-1 text-left">Team Comparison</p>
+          <table class="w-full text-xs text-center">
+            <thead><tr class="text-muted border-b border-bg-border"><th class="text-left py-1 font-semibold"></th><th>REB</th><th>AST</th><th>TOV</th><th>FG</th><th>3P</th></tr></thead>
+            <tbody>
+              <tr><td class="text-left font-semibold text-white py-1">You</td><td class="mono text-white">${tb.reb??'—'}</td><td class="mono text-white">${tb.ast??'—'}</td><td class="mono text-white">${tb.tov??'—'}</td><td class="mono text-white">${tb.fgm??0}/${tb.fga??0}</td><td class="mono text-white">${tb.tpm??0}/${tb.tpa??0}</td></tr>
+              <tr><td class="text-left font-semibold text-white py-1">Opp</td><td class="mono text-white">${ob.reb??'—'}</td><td class="mono text-white">${ob.ast??'—'}</td><td class="mono text-white">${ob.tov??'—'}</td><td class="mono text-white">${ob.fgm??0}/${ob.fga??0}</td><td class="mono text-white">${ob.tpm??0}/${ob.tpa??0}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>`;
 }
 
@@ -2362,18 +2383,23 @@ async function simPlayoffGame(btn) {
   try {
     const r = await api(`/season/playoff-game/${S.playerId}`, { method:'POST' });
     await refreshPlayer(); await refreshSeason(); renderHeader();
+    // Update series score inline without re-rendering the entire page.
+    const swEl = $('#pg-series-wins'), slEl = $('#pg-series-losses');
+    if (swEl) swEl.textContent = r.series?.wins ?? swEl.textContent;
+    if (slEl) slEl.textContent = r.series?.losses ?? slEl.textContent;
+    // Prepend game result (compact summary) above previous results.
+    const resultEl = $('#g-result');
+    if (resultEl) {
+      resultEl.insertAdjacentHTML('afterbegin', gameResult(r.game) + (r.advanced ? playoffSeriesResult(r) : ''));
+      resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
     if (r.champion) {
-      $('#g-result').innerHTML = gameResult(r.game) + playoffSeriesResult(r);
       toast('🏆 NBA CHAMPION!','success'); setTimeout(()=>switchTab('dashboard'), 1800);
     } else if (r.eliminated) {
-      $('#g-result').innerHTML = gameResult(r.game) + playoffSeriesResult(r);
       toast(`Eliminated — ${r.playoff_result}.`,'warn'); setTimeout(()=>switchTab('dashboard'), 1800);
-    } else {
-      // Re-render the playoff panel so series score / round / opponent update
-      // immediately, then inject this game's box score on top.
-      await renderGame($('#main'));
-      $('#g-result').innerHTML = gameResult(r.game) + playoffSeriesResult(r);
-      if (r.advanced) toast(`Series won! Next: ${r.next_opponent}.`,'success');
+    } else if (r.advanced) {
+      toast(`Series won! Next: ${r.next_opponent}.`,'success');
+      await renderGame($('#main')); // re-render to show new opponent
     }
   } catch(e) { toast('Failed: '+e.message,'error'); }
   finally { btn.disabled = false; }
