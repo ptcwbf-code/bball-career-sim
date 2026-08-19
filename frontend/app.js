@@ -899,13 +899,19 @@ async function renderDashboard(m) {
         </div>
       </div>` : '';
   const tm = S.teams?.[p.team_id];
+  // Fetch live team strength (not the static season-1 value).
+  let liveTeam = null;
+  try { liveTeam = await api(`/league/team-overview/${p.team_id}?player_id=${S.playerId}`); } catch(e) {}
+  const tOvr = liveTeam?.strength ?? tm?.ovr ?? 0;
+  const tOff = liveTeam?.off ?? tm?.off ?? 0;
+  const tDef = liveTeam?.def ?? tm?.def ?? 0;
   const teamCard = tm ? `
       <div class="card p-5">
         <h3 class="text-sm font-semibold text-gray-300 mb-3">🏀 ${t('Team Overview')} — ${esc(tm.name)}</h3>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <div><div class="text-xs text-muted">${t('Overall')}</div><div class="font-bold text-white">${tm.ovr} <span class="text-[10px] text-muted">(${t(p.team_tier||'')})</span></div></div>
-          <div><div class="text-xs text-muted">${t('Offense')}</div><div class="font-bold text-accent">${tm.off}</div></div>
-          <div><div class="text-xs text-muted">${t('Defense')}</div><div class="font-bold text-cyber">${tm.def}</div></div>
+          <div><div class="text-xs text-muted">${t('Overall')}</div><div class="font-bold text-white">${tOvr} <span class="text-[10px] text-muted">(${t(p.team_tier||'')})</span></div></div>
+          <div><div class="text-xs text-muted">${t('Offense')}</div><div class="font-bold text-accent">${tOff}</div></div>
+          <div><div class="text-xs text-muted">${t('Defense')}</div><div class="font-bold text-cyber">${tDef}</div></div>
           <div><div class="text-xs text-muted">${t('Record')}</div><div class="font-bold text-white">${ss?.team_wins||0}-${ss?.team_losses||0}</div></div>
           <div><div class="text-xs text-muted">${t('Conference')}</div><div class="font-bold text-white">${t(tm.conf)}</div></div>
           <div><div class="text-xs text-muted">${t('Division')}</div><div class="font-bold text-white">${t(tm.div)}</div></div>
@@ -3265,7 +3271,7 @@ async function loadLife() {
       return `
       <div class="py-2 border-b border-bg-border last:border-0">
         <div class="flex items-center justify-between">
-          <span class="text-sm text-white">${typeIcon[x.type]||'👤'} ${esc(x.name)} ${identity.length?`<span class="text-xs text-faint">· ${identity.join(' · ')}</span>`:''}</span>
+          <span class="text-sm text-white cursor-pointer hover:underline" onclick="openNPCDetail(${x.id})">${typeIcon[x.type]||'👤'} ${esc(x.name)}${identity.length?` <span class="text-xs text-faint">· ${identity.join(' · ')}</span>`:''}</span>
           <span class="flex items-center gap-2">
             <div class="bar-track w-20"><div class="bar-fill" style="width:${x.bond}%;background:${x.bond>=60?'#34d399':x.bond>=40?'#f59e0b':'#f87171'}"></div></div>
             <span class="mono text-xs ${x.bond>=60?'text-good':x.bond>=40?'text-warn':'text-bad'}">${x.bond}</span>
@@ -3295,6 +3301,44 @@ async function respondLife(eventId, choiceIndex, relationshipId) {
     await api(q, { method:'POST' });
     await refreshPlayer(); renderHeader(); loadLife();
   } catch(e) { toast('Failed: '+e.message,'error'); }
+}
+
+async function openNPCDetail(relId) {
+  document.getElementById('npc-modal')?.remove();
+  try {
+    const r = await api(`/player/${S.playerId}/npc/${relId}`);
+    const n = r.npc;
+    let meta = n.meta || {};
+    const events = r.events || [];
+    const age = meta.age;
+    const yearsKnown = Math.max(0, (n.player_age || 22) - (age - (n.player_age || 22)) + (n.player_age || 22));
+    const overlay = document.createElement('div');
+    overlay.id = 'npc-modal';
+    overlay.className = 'fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4';
+    const eventHistory = events.map(e => `
+      <div class="py-1 border-b border-bg-border last:border-0 text-xs">
+        <span class="text-faint">S${e.season_number}</span>
+        <span class="text-white ml-2">${esc(e.choice_made || e.description)}</span>
+      </div>`).join('');
+    overlay.innerHTML = `<div class="card p-5 w-full max-w-md max-h-[80vh] flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-bold text-white">${esc(n.name)}</h3>
+        <button class="text-muted text-xl" onclick="document.getElementById('npc-modal').remove()">×</button>
+      </div>
+      <div class="space-y-2 mb-4">
+        <p class="text-xs text-muted">${n.type} · ${meta.job || '—'} · ${meta.trait || '—'}${age ? ` · ${age}岁` : ''}</p>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-muted">Bond</span>
+          <div class="bar-track flex-1"><div class="bar-fill" style="width:${n.bond}%;background:${n.bond>=60?'#34d399':n.bond>=40?'#f59e0b':'#f87171'}"></div></div>
+          <span class="mono text-xs">${n.bond}</span>
+        </div>
+        <p class="text-xs text-muted">Status: <span class="text-white">${n.status}</span></p>
+      </div>
+      ${(meta.shared||[]).length ? `<div class="mb-4"><p class="text-xs font-semibold text-muted mb-1">Shared memories</p>${(meta.shared||[]).map(s => `<p class="text-xs text-faint italic border-l-2 border-bg-border pl-2 mb-1">${esc(s)}</p>`).join('')}</div>` : ''}
+      ${eventHistory ? `<div class="flex-1 overflow-y-auto"><p class="text-xs font-semibold text-muted mb-1">History</p>${eventHistory}</div>` : '<p class="text-xs text-faint">No events yet.</p>'}
+    </div>`;
+    document.body.appendChild(overlay);
+  } catch(e) { toast('Couldn\'t load NPC details.','error'); }
 }
 
 async function loadLockerRoom() {

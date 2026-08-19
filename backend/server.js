@@ -1795,7 +1795,9 @@ function maybeCareerEvent(playerId) {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   const flags = new Set(JSON.parse(p.flags || '[]'));
   let baseChance = mode === 'story' ? 0.10 : 0.05;
-  if (flags.has('public_wedding')) baseChance *= 1.4; // celebrity life draws more attention
+  if (flags.has('public_wedding')) baseChance *= 1.4;
+  // Early career players get more events — the city is noticing you for the first time.
+  if ((p.experience || 0) <= 2) baseChance *= 1.6;
   if (Math.random() >= baseChance) return null;
   const state = getLeagueState(playerId);
   const candidates = CAREER_EVENTS.filter(e => {
@@ -3849,14 +3851,18 @@ function hasIntroLifeEvent(playerId) {
 }
 
 // Generate a random identity package for a new NPC.
-function generateNpcMeta(type) {
+function generateNpcMeta(type, playerAge) {
   const traits = { en: ['ambitious', 'quiet', 'warm', 'stubborn', 'charming', 'anxious', 'loyal', 'bold'], zh: ['野心勃勃', '安静内敛', '温暖体贴', '固执己见', '魅力四射', '容易焦虑', '忠诚可靠', '大胆果断'] };
-  const jobs = { partner: { en: ['medical resident', 'teacher', 'journalist', 'designer', 'lawyer', 'musician'], zh: ['住院医生', '老师', '记者', '设计师', '律师', '音乐人'] }, friend: { en: ['personal trainer', 'barber', 'chef', 'student', 'mechanic'], zh: ['健身教练', '理发师', '厨师', '学生', '修车工'] }, mentor: { en: ['former All-Star', 'retired coach', 'veteran scout'], zh: ['前全明星球员', '退役教练', '资深球探'] }, rival: { en: ['draft class rival', 'former teammate', 'rising star'], zh: ['选秀同届对手', '前队友', '崛起新星'] }, protege: { en: ['rookie', 'young prospect', 'undrafted gem'], zh: ['新秀', '年轻新秀', '落选秀'] }, agent: { en: ['veteran agent', 'rookie agent', 'big-agency exec'], zh: ['资深经纪人', '新晋经纪人', '大公司高管'] } };
+  const jobs = { partner: { en: ['medical resident', 'teacher', 'journalist', 'designer', 'lawyer', 'musician'], zh: ['住院医生', '老师', '记者', '设计师', '律师', '音乐人'] }, friend: { en: ['personal trainer', 'barber', 'chef', 'student', 'mechanic'], zh: ['健身教练', '理发师', '厨师', '学生', '修车工'] }, mentor: { en: ['former All-Star', 'retired coach', 'veteran scout'], zh: ['前全明星球员', '退役教练', '资深球探'] }, rival: { en: ['draft class rival', 'rising star', 'trash talker'], zh: ['选秀同届对手', '崛起新星', '垃圾话王'] }, protege: { en: ['rookie', 'young prospect', 'undrafted gem'], zh: ['新秀', '年轻新秀', '落选秀'] }, agent: { en: ['veteran agent', 'rookie agent', 'big-agency exec'], zh: ['资深经纪人', '新晋经纪人', '大公司高管'] } };
   const lang = 'en';
+  const pa = playerAge || 22;
+  // Age depends on relationship type — rivals are your age, mentors older, proteges younger.
+  const ageRanges = { partner: [pa - 4, pa + 2], friend: [pa - 5, pa + 5], rival: [pa - 2, pa + 2], mentor: [34, 50], protege: [18, 21], agent: [28, 55] };
+  const [lo, hi] = ageRanges[type] || [20, 38];
   const typeTraits = traits[lang];
   const typeJobs = jobs[type] || jobs.friend;
   return {
-    age: randInt(20, 38),
+    age: clamp(randInt(lo, hi), 18, 55),
     trait: choice(typeTraits),
     job: choice(typeJobs[lang] || typeJobs.friend || ['']),
     shared: [],
@@ -3879,7 +3885,7 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
   if (ev.intro) {
     if (!ch.decline) {
       const name = ev.names ? choice(ev.names) : ev.name;
-      const meta = generateNpcMeta(ev.type);
+      const meta = generateNpcMeta(ev.type, p.age);
       const ins = db.prepare('INSERT INTO relationships (player_id,name,type,bond,status,meta) VALUES (?,?,?,?,?,?)')
         .run(playerId, name, ev.type, 50, 'active', JSON.stringify(meta));
       rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(Number(ins.lastInsertRowid));
@@ -4801,6 +4807,25 @@ app.get('/api/player/:id/retirement-npcs', wrap((req) => {
       };
     })
   };
+}));
+
+app.get('/api/league/team-overview/:teamId', wrap((req) => {
+  const tid = Number(req.params.teamId);
+  const playerId = req.query.player_id;
+  const t = TEAMS[tid];
+  if (!t) throw httpError(404, 'Team not found');
+  const str = teamStrength(playerId, tid);
+  const od = teamOffDef(playerId, tid);
+  return { team_id: tid, name: t.name, abbr: t.abbr, conf: t.conf, div: t.div, strength: str, off: round1(od.off), def: round1(od.def) };
+}));
+
+app.get('/api/player/:id/npc/:relId', wrap((req) => {
+  const rel = db.prepare('SELECT * FROM relationships WHERE id=? AND player_id=?').get(Number(req.params.relId), req.params.id);
+  if (!rel) throw httpError(404, 'Relationship not found');
+  const events = db.prepare('SELECT * FROM life_events WHERE relationship_id=? ORDER BY id').all(rel.id);
+  let meta = {}; try { meta = JSON.parse(rel.meta || '{}'); } catch {}
+  const playerAge = db.prepare('SELECT age FROM players WHERE id=?').get(req.params.id)?.age || 22;
+  return { npc: { ...rel, meta, player_age: playerAge }, events };
 }));
 
 app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
