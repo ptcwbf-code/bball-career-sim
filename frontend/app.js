@@ -3092,15 +3092,26 @@ async function loadLife() {
     const rels = r.relationships || [];
     const events = r.events || [];
     const typeIcon = { family: '👪', partner: '💞', friend: '🤝', mentor: '🧭', agent: '📄', advisor: '💰', rival: '⚔️' };
-    const relHtml = rels.length ? rels.map(x=>`
-      <div class="flex items-center justify-between py-1.5 border-b border-bg-border last:border-0">
-        <span class="text-sm text-white">${typeIcon[x.type]||'👤'} ${esc(x.name)} <span class="text-xs text-muted">${x.type}</span></span>
-        <span class="flex items-center gap-2">
-          <div class="bar-track w-20"><div class="bar-fill" style="width:${x.bond}%;background:${x.bond>=60?'#34d399':x.bond>=40?'#f59e0b':'#f87171'}"></div></div>
-          <span class="mono text-xs ${x.bond>=60?'text-good':x.bond>=40?'text-warn':'text-bad'}">${x.bond}</span>
-          ${x.status!=='active'?`<span class="text-[10px] text-faint">${x.status}</span>`:''}
-        </span>
-      </div>`).join('') : '<p class="text-muted text-sm">No one in your circle yet. Life will find you.</p>';
+    const relHtml = rels.length ? rels.map(x=>{
+      let meta = {}; try { meta = JSON.parse(x.meta || '{}'); } catch {}
+      const identity = [];
+      if (meta.age) identity.push(`${meta.age}岁`);
+      if (meta.trait) identity.push(meta.trait);
+      if (meta.job) identity.push(meta.job);
+      const shared = (meta.shared || []).slice(-2);
+      return `
+      <div class="py-2 border-b border-bg-border last:border-0">
+        <div class="flex items-center justify-between">
+          <span class="text-sm text-white">${typeIcon[x.type]||'👤'} ${esc(x.name)} ${identity.length?`<span class="text-xs text-faint">· ${identity.join(' · ')}</span>`:''}</span>
+          <span class="flex items-center gap-2">
+            <div class="bar-track w-20"><div class="bar-fill" style="width:${x.bond}%;background:${x.bond>=60?'#34d399':x.bond>=40?'#f59e0b':'#f87171'}"></div></div>
+            <span class="mono text-xs ${x.bond>=60?'text-good':x.bond>=40?'text-warn':'text-bad'}">${x.bond}</span>
+            ${x.status!=='active'?`<span class="text-[10px] text-faint">${x.status}</span>`:''}
+          </span>
+        </div>
+        ${shared.length?`<p class="text-[10px] text-faint mt-0.5 pl-4 italic">${shared.map(s=>'…'+s.slice(-40)).join(' · ')}</p>`:''}
+      </div>`;
+    }).join('') : '<p class="text-muted text-sm">No one in your circle yet. Life will find you.</p>';
 
     const evHtml = events.map(ev => `
       <div class="mt-3 rounded-lg bg-bg-hover border border-bg-border p-3">

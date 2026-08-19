@@ -221,15 +221,15 @@ const ALL_TEAM_IDS = Object.keys(TEAMS).map(Number);
 // Position / build system
 // ------------------------------------------------------------
 const POSITION_PROFILES = {
-  PG: { label: 'Point Guard', icon: '🎯', height_range: [1.83, 1.96], weight_range: [77, 93], base_points: 260,
+  PG: { label: 'Point Guard', icon: '🎯', height_range: [1.83, 1.96], weight_range: [77, 93], base_points: 290,
         aptitudes: { athleticism: 45, defense: 40, scoring: 55, playmaking: 65, mental: 55 } },
-  SG: { label: 'Shooting Guard', icon: '🔥', height_range: [1.91, 2.03], weight_range: [84, 102], base_points: 250,
+  SG: { label: 'Shooting Guard', icon: '🔥', height_range: [1.91, 2.03], weight_range: [84, 102], base_points: 280,
         aptitudes: { athleticism: 45, defense: 40, scoring: 65, playmaking: 45, mental: 55 } },
-  SF: { label: 'Small Forward', icon: '⚡', height_range: [1.98, 2.08], weight_range: [93, 112], base_points: 245,
+  SF: { label: 'Small Forward', icon: '⚡', height_range: [1.98, 2.08], weight_range: [93, 112], base_points: 275,
         aptitudes: { athleticism: 50, defense: 50, scoring: 55, playmaking: 35, mental: 55 } },
-  PF: { label: 'Power Forward', icon: '💪', height_range: [2.03, 2.13], weight_range: [102, 122], base_points: 240,
+  PF: { label: 'Power Forward', icon: '💪', height_range: [2.03, 2.13], weight_range: [102, 122], base_points: 270,
         aptitudes: { athleticism: 55, defense: 60, scoring: 45, playmaking: 25, mental: 55 } },
-  C:  { label: 'Center', icon: '🏔️', height_range: [2.08, 2.21], weight_range: [109, 136], base_points: 235,
+  C:  { label: 'Center', icon: '🏔️', height_range: [2.08, 2.21], weight_range: [109, 136], base_points: 265,
         aptitudes: { athleticism: 55, defense: 70, scoring: 35, playmaking: 20, mental: 55 } },
 };
 
@@ -1815,7 +1815,7 @@ function allStarQualifies(p) {
   const score = p.s_pts / g + p.s_reb / g * 0.7 + p.s_ast / g * 0.8 + p.s_stl / g * 1.5 + p.s_blk / g * 1.5;
   // Fan voting: a big fan base earns a spot even with slightly lower production —
   // the way popular players get voted in regardless of the stat sheet.
-  const fanBoost = clamp((p.fan_base ?? 5) / 40, 0, 2.5);
+  const fanBoost = clamp((p.fan_base ?? 5) / 30, 0, 3.5);
   return score > (22 - fanBoost) && p.s_wins >= 20;
 }
 
@@ -1912,7 +1912,7 @@ const DUNK_DISTANCES = [
 ];
 
 // Eligibility: dunk needs vertical_jump>=55 or finishing>=50 or clout>=70.
-function dunkEligible(p) { return (p.vertical_jump >= 55 || p.finishing >= 50 || (p.clout || 0) >= 70); }
+function dunkEligible(p) { return (p.vertical_jump >= 48 || p.finishing >= 45 || (p.clout || 0) >= 70); }
 
 // Score one dunk attempt: returns 40-50.
 function scoreDunk(playerOverall, dunkDiff, distPenalty, attempt) {
@@ -1965,7 +1965,7 @@ const THREE_RACKS = [
 ];
 
 // Eligibility: 3pt needs catch_shoot_3pt>=50 or clout>=70.
-function threeEligible(p) { return (p.catch_shoot_3pt >= 50 || (p.clout || 0) >= 70); }
+function threeEligible(p) { return (p.catch_shoot_3pt >= 45 || (p.clout || 0) >= 70); }
 
 // Simulate one rack (5 balls): 4 regular (1pt) + 1 money ball (2pt).
 // `makeProb` is per-ball probability. Returns array of {ball, made, points}.
@@ -2442,6 +2442,16 @@ function advanceYear(playerId) {
   // rich player slowly slides toward the scam-risk zone unless they hire a new
   // reputable advisor. After a scam it resets to 0 and the risk is gone for a while.
   db.prepare('UPDATE players SET advisor_trust=MAX(0, advisor_trust - ?) WHERE id=?').run(randInt(1, 4), playerId);
+
+  // NPCs age alongside the player — update their meta.age each year.
+  const rels = db.prepare('SELECT id, meta FROM relationships WHERE player_id=?').all(playerId);
+  for (const r of rels) {
+    try {
+      const meta = JSON.parse(r.meta || '{}');
+      if (meta.age != null) { meta.age = (meta.age || 0) + 1; }
+      db.prepare('UPDATE relationships SET meta=? WHERE id=?').run(JSON.stringify(meta), r.id);
+    } catch {}
+  }
 
   // Locker-room chemistry steadies (or sours) the mood heading into the offseason.
   const chemMorale = Math.round((teamChemistry(playerId) - 50) / 10); // -5..+5
@@ -3758,6 +3768,22 @@ function hasIntroLifeEvent(playerId) {
     && introAvailable(playerId, e, season));
 }
 
+// Generate a random identity package for a new NPC.
+function generateNpcMeta(type) {
+  const traits = { en: ['ambitious', 'quiet', 'warm', 'stubborn', 'charming', 'anxious', 'loyal', 'bold'], zh: ['野心勃勃', '安静内敛', '温暖体贴', '固执己见', '魅力四射', '容易焦虑', '忠诚可靠', '大胆果断'] };
+  const jobs = { partner: { en: ['medical resident', 'teacher', 'journalist', 'designer', 'lawyer', 'musician'], zh: ['住院医生', '老师', '记者', '设计师', '律师', '音乐人'] }, friend: { en: ['personal trainer', 'barber', 'chef', 'student', 'mechanic'], zh: ['健身教练', '理发师', '厨师', '学生', '修车工'] }, mentor: { en: ['former All-Star', 'retired coach', 'veteran scout'], zh: ['前全明星球员', '退役教练', '资深球探'] }, rival: { en: ['draft class rival', 'former teammate', 'rising star'], zh: ['选秀同届对手', '前队友', '崛起新星'] }, protege: { en: ['rookie', 'young prospect', 'undrafted gem'], zh: ['新秀', '年轻新秀', '落选秀'] }, agent: { en: ['veteran agent', 'rookie agent', 'big-agency exec'], zh: ['资深经纪人', '新晋经纪人', '大公司高管'] } };
+  const lang = 'en';
+  const typeTraits = traits[lang];
+  const typeJobs = jobs[type] || jobs.friend;
+  return {
+    age: randInt(20, 38),
+    trait: choice(typeTraits),
+    job: choice(typeJobs[lang] || typeJobs.friend || ['']),
+    shared: [],
+    last_event: null,
+  };
+}
+
 function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null) {
   const ev = LIFE_EVENTS.find(e => e.id === eventId);
   if (!ev || choiceIndex < 0 || choiceIndex >= ev.choices.length) throw httpError(400, 'Invalid life event or choice');
@@ -3773,8 +3799,9 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
   if (ev.intro) {
     if (!ch.decline) {
       const name = ev.names ? choice(ev.names) : ev.name;
-      const ins = db.prepare('INSERT INTO relationships (player_id,name,type,bond,status) VALUES (?,?,?,?,?)')
-        .run(playerId, name, ev.type, 50, 'active');
+      const meta = generateNpcMeta(ev.type);
+      const ins = db.prepare('INSERT INTO relationships (player_id,name,type,bond,status,meta) VALUES (?,?,?,?,?,?)')
+        .run(playerId, name, ev.type, 50, 'active', JSON.stringify(meta));
       rel = db.prepare('SELECT * FROM relationships WHERE id=?').get(Number(ins.lastInsertRowid));
     }
   } else if (!rel) {
@@ -3826,7 +3853,15 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
     newBond = clamp((rel.bond || 50) + (ch.bond || 0), 0, 100);
     newStatus = ch.status || rel.status;
     const pending = ch.next || null;
-    db.prepare('UPDATE relationships SET bond=?, status=?, pending_event=? WHERE id=?').run(newBond, newStatus, pending, rel.id);
+    // Append shared memory to NPC's identity card.
+    let meta = {};
+    try { meta = JSON.parse(rel.meta || '{}'); } catch {}
+    if (!meta.shared) meta.shared = [];
+    const summary = pick(ch.text, 'en');
+    if (summary && !meta.shared.includes(summary)) meta.shared.push(summary);
+    if (meta.shared.length > 6) meta.shared = meta.shared.slice(-6); // keep last 6
+    meta.last_event = ev.id;
+    db.prepare('UPDATE relationships SET bond=?, status=?, pending_event=?, meta=? WHERE id=?').run(newBond, newStatus, pending, JSON.stringify(meta), rel.id);
     if (pending) nextEvent = LIFE_EVENTS.find(e => e.id === pending);
   }
 
