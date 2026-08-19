@@ -1392,14 +1392,16 @@ function showDunkPicker(dunkNum) {
   overlay.innerHTML = `<div class="card p-5 w-full max-w-xl max-h-[85vh] flex flex-col">
     <h3 class="text-lg font-bold text-white mb-1">🛫 Dunk Contest — Dunk #${dunkNum}/2</h3>
     ${c.dunks.length ? `<p class="text-xs text-faint mb-2">Previous: ${c.dunks.map(d=>d.score).join(' + ')} = ${c.dunks.reduce((s,d)=>s+d.score,0)}</p>` : ''}
-    <p class="text-xs text-muted mb-3">Pick your dunk type and distance. Score range: 40-50. AI opponents will also perform.</p>
+    <p class="text-xs text-muted mb-3">Pick your dunk elements (multiple = combo = harder but higher ceiling) and distance. Score range: 40-50 from 5 judges.</p>
     <div class="mb-3">
-      <label class="text-xs font-semibold text-muted">Dunk Type</label>
+      <label class="text-xs font-semibold text-muted">Dunk Elements (select multiple for combo)</label>
       <div class="grid grid-cols-2 gap-2 mt-1 max-h-40 overflow-y-auto" id="dunk-types">
-        ${c.opts.dunks.map(d => `<button class="text-left card card-hover p-2 text-xs" onclick="this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('ring-2','ring-accent'));this.classList.add('ring-2','ring-accent');this.closest('.card').dataset.dunk='${d.id}'">
+        ${c.opts.dunks.map(d => `<label class="text-left card card-hover p-2 text-xs cursor-pointer flex items-center gap-2">
+          <input type="checkbox" value="${d.id}" class="accent-accent" onclick="updateDunkCombo()">
           <span class="text-white font-semibold">${d.icon} ${pick(d.label, S.season?.lang)}</span><span class="text-faint ml-1">diff ${d.diff}</span>
-        </button>`).join('')}
+        </label>`).join('')}
       </div>
+      <p class="text-[10px] text-faint mt-1" id="dunk-combo-info">Select 1-3 elements. More = harder + higher ceiling.</p>
     </div>
     <div class="mb-3">
       <label class="text-xs font-semibold text-muted">Distance</label>
@@ -1414,12 +1416,21 @@ function showDunkPicker(dunkNum) {
   document.body.appendChild(overlay);
 }
 
+function updateDunkCombo() {
+  const checks = [...document.querySelectorAll('#dunk-types input:checked')];
+  const info = document.querySelector('#dunk-combo-info');
+  if (info) info.textContent = checks.length === 0 ? 'Select 1-3 elements.' :
+    checks.length === 1 ? '1 element — safe and clean.' :
+    checks.length === 2 ? '2 elements — good combo!' : '3 elements — high risk, high reward!';
+}
+
 async function submitDunk(dunkNum) {
-  const dunkEl = document.querySelector('#dunk-types .ring-2');
+  const checks = [...document.querySelectorAll('#dunk-types input:checked')];
   const distEl = document.querySelector('#dunk-distances .ring-2');
-  if (!dunkEl) { toast('Pick a dunk type.','warn'); return; }
+  if (!checks.length) { toast('Select at least one dunk element.','warn'); return; }
+  if (checks.length > 3) { toast('Max 3 elements per dunk.','warn'); return; }
   if (!distEl) { toast('Pick a distance.','warn'); return; }
-  const dunkId = dunkEl.closest('[data-dunk]')?.dataset?.dunk || dunkEl.dataset.dunk;
+  const dunkIds = checks.map(c => c.value).join(',');
   const distId = distEl.closest('[data-dist]')?.dataset?.dist || distEl.dataset.dist;
   document.getElementById('contest-modal')?.remove();
   const overlay = document.createElement('div');
@@ -1433,14 +1444,18 @@ async function submitDunk(dunkNum) {
   document.body.appendChild(overlay);
   const area = document.getElementById('dunk-result-area');
   try {
-    const r = await api(`/contest/dunk/${S.playerId}?dunk=${dunkId}&distance=${distId}`);
-    // Animate: show player result first, then opponents one by one
+    const r = await api(`/contest/dunk/${S.playerId}?dunk=${dunkIds}&distance=${distId}`);
+    const judges = r.player_judges || [];
+    const judgeStr = judges.length ? judges.map(j => `<span class="mono">${j}</span>`).join(' + ') : '';
     area.insertAdjacentHTML('beforeend', `<div class="p-2 rounded bg-accent/10 border border-accent/30 mb-2">
       <span class="text-accent font-bold">⭐ You: ${r.dunk} from ${r.distance} → ${r.player_score}</span>
+      ${judgeStr ? `<span class="text-xs text-faint ml-2">(${judgeStr})</span>` : ''}
     </div>`);
     await sleep(400);
     for (const opp of r.opponents) {
-      area.insertAdjacentHTML('beforeend', `<div class="p-1 text-xs text-muted border-b border-bg-border">${opp.name}: ${opp.dunk} from ${opp.distance} → ${opp.score}</div>`);
+      const oppJudges = opp.judges || [];
+      const oppStr = oppJudges.length ? oppJudges.map(j => `<span class="mono">${j}</span>`).join(' + ') : '';
+      area.insertAdjacentHTML('beforeend', `<div class="p-1 text-xs text-muted border-b border-bg-border">${opp.name}: ${opp.dunk} from ${opp.distance} → ${opp.score}${oppStr ? ` <span class="text-faint">(${oppStr})</span>` : ''}</div>`);
       await sleep(300);
     }
     area.insertAdjacentHTML('beforeend', `<div class="mt-2 text-xs"><p class="font-semibold text-muted mb-1">Rankings:</p>${r.rankings.map((p,i) => `<div class="flex justify-between ${p.is_player?'text-accent font-bold':'text-white'} py-0.5"><span>${i+1}. ${p.name}</span><span class="mono">${p.score}</span></div>`).join('')}</div>`);

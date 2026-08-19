@@ -1939,13 +1939,29 @@ function dunkEligible(p) {
   return (p.vertical_jump >= 75 || (p.finishing >= 80 && p.vertical_jump >= 60) || (p.clout || 0) >= 85);
 }
 
-// Score one dunk attempt: returns 40-50.
-function scoreDunk(playerOverall, dunkDiff, distPenalty, attempt) {
-  const energyDecay = (attempt - 1) * 0.3;
-  const base = 46 - (dunkDiff + distPenalty) * 1.1 - energyDecay;
-  const attrBonus = (playerOverall - 70) * 0.04;
-  const raw = base + attrBonus + gauss(0, 1.2);
-  return round1(clamp(raw, 38, 50));
+// Score one dunk attempt with combo elements + 5-judge system.
+// `dunkIds` is an array of dunk type IDs selected by the player.
+// Returns { judges: [5 scores], total, success, combo_label }.
+function scoreDunk(playerAttrs, dunkIds, distPenalty, attempt) {
+  const energyDecay = (attempt - 1) * 0.2;
+  // Combined difficulty: max element diff + 0.5 per extra element + dist penalty.
+  const elements = dunkIds.map(id => DUNK_TYPES.find(d => d.id === id)).filter(Boolean);
+  const maxDiff = Math.max(...elements.map(e => e.diff), 0);
+  const comboDiff = maxDiff + (elements.length - 1) * 0.6 + distPenalty;
+  // Success probability: harder combos are more likely to fail.
+  const attrPower = ((playerAttrs.vertical_jump || 60) * 0.5 + (playerAttrs.finishing || 60) * 0.3 + (playerAttrs.strength || 60) * 0.2) / 100;
+  const successProb = clamp(attrPower * (1.4 - comboDiff * 0.12) - energyDecay * 0.02, 0.08, 0.95);
+  const success = Math.random() < successProb;
+  // 5 judges, each 8.0–10.0, then multiply by attempt count (attempt 1 = ×1, attempt 2 = ×1, attempt 3 = ×0.8).
+  const attemptMult = attempt >= 3 ? 0.8 : 1;
+  const judges = Array.from({length: 5}, () => {
+    if (!success) return round1(clamp(8.0 + gauss(0, 0.5), 6.0, 9.0) * attemptMult);
+    const base = 9.5 - comboDiff * 0.18 - energyDecay * 0.03 + gauss(0, 0.35);
+    return round1(clamp(base, 8.0, 10.0) * attemptMult);
+  });
+  const total = round1(judges.reduce((s, j) => s + j, 0));
+  const comboLabel = elements.map(e => pick(e.label, 'en')).join(' + ');
+  return { judges, total, success, combo_label: comboLabel, diff: round1(comboDiff) };
 }
 
 // Generate AI dunk contest participants (3 opponents with varied attributes).
@@ -4344,26 +4360,27 @@ app.get('/api/season/allstar-weekend-options/:id', wrap((req) => {
 }));
 app.post('/api/season/allstar-weekend/:id', wrap((req) => resolveAllStarWeekend(req.params.id, req.query.choice)));
 
-// Multi-round contest scoring: scores one dunk (all attempts) for one round.
-// Returns the dunk score (40-50), AI opponents' scores for this dunk, and running rankings.
+// Multi-round contest scoring: scores one dunk (combo) for one round.
+// dunk = comma-separated dunk IDs (e.g., "windmill,360"), distance = distance ID.
 app.get('/api/contest/dunk/:id', wrap((req) => {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
   if (!p) throw httpError(404, 'Player not found');
-  const dunkId = req.query.dunk;
+  const dunkIds = (req.query.dunk || '').split(',').filter(Boolean);
   const distId = req.query.distance;
-  const dunk = DUNK_TYPES.find(d => d.id === dunkId) || DUNK_TYPES[0];
   const dist = DUNK_DISTANCES.find(d => d.id === distId) || DUNK_DISTANCES[0];
   const lang = getLeagueState(req.params.id).lang || 'en';
-  const playerScore = scoreDunk(calculateOverallRating(p), dunk.diff, dist.penalty, 1);
+  const playerScore = scoreDunk(p, dunkIds, dist.penalty, 1);
   const opponents = generateDunkOpponents();
   const opponentScores = opponents.map(ai => {
     const aiDunk = aiPickDunk(ai);
     const aiDist = aiPickDistance(ai);
-    return { name: ai.name, dunk: pick(aiDunk.label, lang), distance: pick(aiDist.label, lang), score: scoreDunk(ai.overall, aiDunk.diff, aiDist.penalty, 1) };
+    return { name: ai.name, dunk: pick(aiDunk.label, lang), distance: pick(aiDist.label, lang),
+             score: scoreDunk(ai, [aiDunk.id], aiDist.penalty, 1) };
   });
-  const all = [{ name: p.name, dunk: pick(dunk.label, lang), distance: pick(dist.label, lang), score: playerScore, is_player: true }, ...opponentScores]
+  const dunkLabel = dunkIds.map(id => { const d = DUNK_TYPES.find(dt => dt.id === id); return d ? pick(d.label, lang) : id; }).join(' + ');
+  const all = [{ name: p.name, dunk: dunkLabel, distance: pick(dist.label, lang), score: playerScore.total, judges: playerScore.judges, is_player: true }, ...opponentScores.map(o => ({...o, score: o.score.total, judges: o.score.judges}))]
     .sort((a, b) => b.score - a.score);
-  return { dunk: pick(dunk.label, lang), distance: pick(dist.label, lang), player_score: playerScore, rankings: all, opponents: opponentScores };
+  return { dunk: dunkLabel, distance: pick(dist.label, lang), player_score: playerScore.total, player_judges: playerScore.judges, rankings: all, opponents: opponentScores.map(o => ({...o, score: o.score.total, judges: o.score.judges})) };
 }));
 
 // Simulate one full 3pt contest round for the player; returns all 27 ball results.
