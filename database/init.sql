@@ -241,7 +241,8 @@ CREATE TABLE IF NOT EXISTS league_state (
     opponent_seed INTEGER DEFAULT 0,
     market REAL DEFAULT 0,
     intl_tournament TEXT,
-    game_mode TEXT DEFAULT 'classic'
+    game_mode TEXT DEFAULT 'classic',
+    lang TEXT DEFAULT 'en'
 );
 
 CREATE TABLE IF NOT EXISTS team_records (
