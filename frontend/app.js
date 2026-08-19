@@ -500,7 +500,7 @@ function renderCreateStep2(m) {
 }
 
 function renderCreateStep3(m) {
-  const cats = { athleticism:'⚡', scoring:'🎯', playmaking:'👁️', defense:'🛡️', mental:'🧠' };
+  const cats = { outside:'🎯', inside:'🏀', athleticism:'⚡', playmaking:'👁️', defense:'🛡️', mental:'🧠' };
   m.innerHTML = `
     <div class="card p-6">
       <div class="flex items-center justify-between mb-1">
@@ -575,12 +575,21 @@ function renderCreateStep3(m) {
     }
 
     function setVal(cat, val) {
-      S.create.allocs[cat] = Math.max(0, Math.min(80, val));
+      const usedOthers = Object.entries(S.create.allocs).filter(([k]) => k !== cat).reduce((a, [,v]) => a + v, 0);
+      const maxForCat = Math.min(80, total - usedOthers);
+      S.create.allocs[cat] = Math.max(0, Math.min(maxForCat, val));
       const row = $(`[data-row="${cat}"]`, m);
       if (row) {
         row.querySelector('[data-val]').textContent = S.create.allocs[cat];
-        row.querySelector('input[data-cat]').value = S.create.allocs[cat];
+        const sl = row.querySelector('input[data-cat]');
+        if (sl) { sl.value = S.create.allocs[cat]; sl.max = maxForCat; }
       }
+      // Refresh all sliders' effective max after each change.
+      $$('input[data-cat]', m).forEach(sl => {
+        const k = sl.dataset.cat;
+        const usedOther = Object.entries(S.create.allocs).filter(([kk]) => kk !== k).reduce((a, [,v]) => a + v, 0);
+        sl.max = Math.min(80, total - usedOther);
+      });
       updateRemaining();
     }
 
