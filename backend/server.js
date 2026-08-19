@@ -1492,7 +1492,7 @@ function aiPerGameStats(overall, id) {
   const playmaker = clamp(0.20 + gaussLocal() * 0.09, 0.07, 0.38);
   return {
     ppg: round1(clamp(scorer    * overall * 0.66 + gaussLocal() * 3.2, 4, 35)),
-    rpg: round1(clamp(rebounder * overall * 0.32 + gaussLocal() * 1.2, 1, 15)),
+    rpg: round1(clamp(rebounder * overall * 0.34 + gaussLocal() * 1.4, 1, 15)),
     apg: round1(clamp(playmaker * overall * 0.34 + gaussLocal() * 0.8, 1, 12)),
     spg: round1(clamp(overall * 0.006 + stealSpec * 1.9, 0.3, 2.6)),
     bpg: round1(clamp(overall * 0.004 + blockSpec * 2.9, 0.2, 3.6)),
