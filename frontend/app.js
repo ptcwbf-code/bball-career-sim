@@ -15,6 +15,7 @@ const S = {
 const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
 async function api(path, opts={}) {
   const res = await fetch(API+path, { headers:{'Content-Type':'application/json', ...opts.headers}, ...opts });
@@ -275,12 +276,18 @@ const NATIONALITIES = {
   'Brazil': '🇧🇷 Brazil', 'Japan': '🇯🇵 Japan', 'Nigeria': '🇳🇬 Nigeria', 'Italy': '🇮🇹 Italy',
 };
 function resetCreate() {
-  S.create = { name:'', position:'PG', age:19, height:null, weight:null, allocs:{}, background:'small_town', nationality:'USA', _backgrounds:null, _step:1, _pool:null };
+  S.create = { name:'', position:'PG', age:19, height:null, weight:null, allocs:{}, background:'small_town', nationality:'USA', _backgrounds:null, _step:1, _pool:null,
+    // Journey fields
+    journey:{ layer1:null, layer2:null, layer3:null }, _journeyLayer:1, _journeyPaths:null, _journeyEvents:[],
+    _fibaResult:null, youthEffects:{}, exposure:0, pathLabel:'', _synergy:null,
+    // Combine fields
+    combineResult:null, workoutTeams:[], workoutResults:[], combineSwing:0
+  };
 }
 
 function renderCreate(m) {
   const step = S.create._step || 1;
-  const steps = [['Player','Name & position'],['Build','Height & weight'],['Skills','Allocate points'],['Draft','Draft night']];
+  const steps = [['Identity','Name & bg'],['Journey','Growth path'],['Build','Height & weight'],['Skills','Allocate pts'],['Combine','Tryouts'],['Draft','Draft night']];
   m.innerHTML = `
     <div class="max-w-2xl mx-auto">
       <div class="card p-4 mb-5" id="create-saves" style="display:none">
@@ -292,18 +299,23 @@ function renderCreate(m) {
         <p class="text-sm text-warn">⚠️ You already have a career in progress (<b>${esc(S.player.name)}</b>). Creating a new player will start over.</p>
         <button class="btn-secondary mt-2" onclick="switchTab('dashboard')">← Back to My Career</button>
       </div>` : ''}
-      <div class="flex items-center gap-2 mb-8">
+      <div class="flex items-center gap-1 mb-8 overflow-x-auto pb-1">
         ${steps.map((s,i)=>`
-          <div class="step-dot ${i+1<step?'done':i+1===step?'current':''}">${i+1<step?'✓':i+1}</div>
-          ${i<3?'<div class="step-line '+(i+1<step?'done':'')+'"></div>':''}
+          <div class="timeline-node flex-shrink-0">
+            <div class="timeline-dot ${i+1<step?'done':i+1===step?'current':''}">${i+1<step?'✓':i+1}</div>
+            <div class="text-[9px] text-faint mt-1 text-center whitespace-nowrap">${s[0]}</div>
+          </div>
+          ${i<5?'<div class="timeline-line '+(i+1<step?'done':'')+'"></div>':''}
         `).join('')}
       </div>
       <div id="create-body"></div>
     </div>`;
   const body = $('#create-body');
   if (step===1) renderCreateStep1(body);
-  else if (step===2) renderCreateStep2(body);
-  else if (step===3) renderCreateStep3(body);
+  else if (step===2) renderCreateStep2_Journey(body);
+  else if (step===3) renderCreateStep2(body);
+  else if (step===4) renderCreateStep3(body);
+  else if (step===5) renderCreateStep5_Combine(body);
   else renderDraftNight(body);
   loadAllSaves();
 }
@@ -462,6 +474,563 @@ function renderCreateStep1(m) {
   };
 }
 
+async function renderCreateStep2_Journey(m) {
+  // ── Local helpers ──────────────────────────────────────────────────────
+  function randInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+  const FX_LABEL = { bbiq:'BBIQ', pnr_vision:'P&R Vision', potential:'Potential', morale:'Morale' };
+  function fxLabel(k) { return FX_LABEL[k] || k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()); }
+  function fxTag(v, k) {
+    if (v === 0) return '';
+    const c = v > 0 ? 'bg-good/10 text-good' : 'bg-bad/10 text-bad';
+    return `<span class="text-[10px] px-1.5 py-0.5 rounded ${c}">${fxLabel(k)} ${v>0?'+':''}${v}</span>`;
+  }
+  function fxRangeTag(arr, k) {
+    if (!Array.isArray(arr)) return fxTag(arr, k);
+    const c = arr[0] >= 0 ? 'bg-good/10 text-good' : arr[1] <= 0 ? 'bg-bad/10 text-bad' : 'bg-warn/10 text-warn';
+    return `<span class="text-[10px] px-1.5 py-0.5 rounded ${c}">${fxLabel(k)} ${arr[0]} ~ ${arr[1] > 0 ? '+' : ''}${arr[1]}</span>`;
+  }
+  function pathLabelForId(id) {
+    for (const lk of layerKeys) {
+      const opt = (paths[lk]||[]).find(o => o.id === id);
+      if (opt) return opt.label;
+    }
+    return id;
+  }
+
+  // ── Constants ──────────────────────────────────────────────────────────
+  const layerKeys   = ['childhood', 'teen', 'predraft'];
+  const layerLabels = ['Childhood', 'Teenage', 'Pre-Draft'];
+  const layerIcons  = ['🌱', '🏀', '🎓'];
+  const layerAges   = ['(Age 6-12)', '(Age 13-17)', '(Age 17-19)'];
+
+  // ── Loading screen ─────────────────────────────────────────────────────
+  m.innerHTML = `
+    <div class="card p-6">
+      <div class="flex items-center gap-3 mb-1">
+        <span class="text-2xl">🗺️</span>
+        <div><h2 class="text-xl font-bold text-white">Your Journey to the Draft</h2>
+        <p class="text-sm text-muted">Every path is different. Where you come from shapes who you become.</p></div>
+      </div>
+      <div class="mt-8 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-xs text-muted">Loading journey paths…</p></div>
+      <div class="mt-6 flex justify-between" id="j-nav"><button class="btn-secondary" id="c-back-journey">← Back</button><span></span></div>
+    </div>`;
+  $('#c-back-journey').onclick = () => { S.create._step = 1; renderCreate($('#main')); };
+
+  // ── Fetch paths ────────────────────────────────────────────────────────
+  let paths = S.create._journeyPaths;
+  await loadPaths();
+
+  async function loadPaths() {
+    if (!S.create._journeyPaths) {
+      try {
+        const data = await api(`/journey/paths?nationality=${S.create.nationality || 'USA'}`);
+        S.create._journeyPaths = data.paths;
+      } catch(e) { toast('Failed to load journey paths','error'); return; }
+    }
+    paths = S.create._journeyPaths;
+    renderJourneyPage();
+  }
+
+  // ── Main page render ───────────────────────────────────────────────────
+  function renderJourneyPage() {
+    const curLayer = Math.min(S.create._journeyLayer || 1, 3);
+    const journeyDone = S.create.journey.layer3 !== null;
+    const layerKey = layerKeys[curLayer - 1];
+    const options = paths[layerKey] || [];
+
+    // Build accumulated effects
+    const allFx = {};
+    // Path effects
+    for (const lid of ['layer1','layer2','layer3']) {
+      const pid = S.create.journey[lid];
+      if (!pid) continue;
+      for (const lk of layerKeys) {
+        const opt = (paths[lk]||[]).find(o => o.id === pid);
+        if (!opt) continue;
+        for (const [k,v] of Object.entries(opt.effects||{})) allFx[k] = (allFx[k]||0) + v;
+        if (opt.potential_bonus) allFx.potential = (allFx.potential||0) + opt.potential_bonus;
+      }
+    }
+    // Event effects
+    for (const ev of S.create._journeyEvents) {
+      for (const [k,v] of Object.entries(ev.resolved_effects||{})) allFx[k] = (allFx[k]||0) + v;
+      if (ev.clout_bonus) allFx.clout = (allFx.clout||0) + ev.clout_bonus;
+      if (ev.fan_base_bonus) allFx.fan_base = (allFx.fan_base||0) + ev.fan_base_bonus;
+    }
+    // Synergy effects
+    if (S.create._synergy && S.create._synergy.id) {
+      for (const [k,v] of Object.entries(S.create._synergy.effects||{})) allFx[k] = (allFx[k]||0) + v;
+    }
+    // FIBA morale
+    if (S.create._fibaResult && S.create._fibaResult._morale_bonus) {
+      allFx.morale = (allFx.morale||0) + S.create._fibaResult._morale_bonus;
+    }
+    // Morale offsets from paths
+    for (const lid of ['layer1','layer2','layer3']) {
+      const pid = S.create.journey[lid];
+      if (!pid) continue;
+      for (const lk of layerKeys) {
+        const opt = (paths[lk]||[]).find(o => o.id === pid);
+        if (opt && opt.morale_offset) allFx.morale = (allFx.morale||0) + opt.morale_offset;
+      }
+    }
+    const fxEntries = Object.entries(allFx).filter(([,v])=>v!==0).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
+
+    // Total exposure (FIBA bonus already added to S.create.exposure in runFiba)
+    const totalExp = S.create.exposure;
+
+    m.innerHTML = `
+      <div class="card p-6">
+        <div class="flex items-center gap-3 mb-1">
+          <span class="text-2xl">🗺️</span>
+          <div><h2 class="text-xl font-bold text-white">Your Journey to the Draft</h2>
+          <p class="text-sm text-muted">Every path is different. Where you come from shapes who you become.</p></div>
+        </div>
+
+        <!-- Timeline -->
+        <div class="timeline-track mt-5 mb-6">
+          ${layerLabels.map((lbl, i) => {
+            const ln = i + 1;
+            const isDone = ln < curLayer || (ln === curLayer && S.create.journey['layer'+ln]);
+            const isCur = ln === curLayer && !S.create.journey['layer'+ln];
+            return `
+              <div class="timeline-node">
+                <div class="timeline-dot ${isDone?'done':''} ${isCur?'current':''}">${isDone ? '✓' : layerIcons[i]}</div>
+                <div class="text-[10px] ${isCur?'text-accent font-semibold':'text-faint'} mt-1.5 text-center">${lbl}</div>
+                <div class="text-[9px] text-faint text-center">${layerAges[i]}</div>
+              </div>
+              ${i < 2 ? '<div class="timeline-line '+(isDone?'done':'')+'"></div>' : ''}`;
+          }).join('')}
+        </div>
+
+        <!-- Content area -->
+        <div id="j-content"></div>
+
+        <!-- FIBA trigger (after layer 2) -->
+        <div id="j-fiba"></div>
+
+        <!-- Synergy badge -->
+        <div id="j-synergy"></div>
+
+        <!-- Running effects summary -->
+        <div id="j-summary"></div>
+
+        <!-- Navigation -->
+        <div class="mt-6 flex justify-between" id="j-nav">
+          <button class="btn-secondary" id="c-back-journey">← Back</button>
+          <button class="btn-primary" id="c-next-journey">Continue →</button>
+        </div>
+      </div>`;
+
+    // ── Render content ──
+    const content = $('#j-content');
+
+    if (journeyDone) {
+      // All layers complete — show final review
+      content.innerHTML = renderFinalReview();
+    } else {
+      // Show current layer
+      const curChoice = S.create.journey['layer'+curLayer];
+      if (!curChoice) {
+        // Need path selection
+        content.innerHTML = renderPathCards(curLayer, layerKey, options);
+        wirePathCards();
+      } else {
+        // Path chosen — show event (stored or roll new)
+        const evIdx = curLayer - 1;
+        const storedEv = S.create._journeyEvents[evIdx];
+        if (storedEv) {
+          showResolvedEvent(content, storedEv, curLayer);
+        } else {
+          content.innerHTML = `<div class="text-center py-6"><div class="spinner mx-auto mb-2"></div><p class="text-xs text-muted">Something happened on your path…</p></div>`;
+          rollEvent(curLayer, layerKey);
+          return; // rollEvent will call renderJourneyPage when done
+        }
+      }
+    }
+
+    // ── FIBA trigger (only when actively at predraft, not in final review) ──
+    if (!journeyDone) {
+      const showFiba = curLayer >= 3 && !S.create.journey.layer3 &&
+        (S.create.journey.layer2 === 'national_junior' || (S.create.nationality || 'USA') !== 'USA');
+      if (showFiba && !S.create._fibaResult) {
+        content.insertAdjacentHTML('beforeend', '<div id="j-fiba" class="mt-4"></div>');
+        renderFibaTrigger();
+      } else if (S.create._fibaResult && !S.create.journey.layer3) {
+        content.insertAdjacentHTML('beforeend', '<div id="j-fiba" class="mt-4"></div>');
+        renderFibaResult();
+      }
+    }
+
+    // ── Synergy ──
+    if (journeyDone) {
+      if (!S.create._synergy) {
+        checkSynergy().then(() => {
+          if (S.create._synergy && S.create._synergy.id) renderSynergy();
+          renderSummary(fxEntries, totalExp);
+        });
+        return; // Will finish rendering after synergy check
+      }
+      if (S.create._synergy && S.create._synergy.id) renderSynergy();
+    }
+
+    // ── Summary ──
+    renderSummary(fxEntries, totalExp);
+
+    // ── Navigation wiring ──
+    wireNavigation(journeyDone);
+  }
+
+  // ── Path selection cards ────────────────────────────────────────────────
+  function renderPathCards(layerNum, layerKey, options) {
+    return `
+      <p class="text-sm font-semibold text-white mb-3">Choose your ${layerLabels[layerNum-1].toLowerCase()} path ${layerAges[layerNum-1]}:</p>
+      <div class="grid gap-3" id="path-cards-grid">
+        ${options.map(opt => `
+          <button class="journey-choice card card-hover p-4 text-left cursor-pointer" data-path-id="${opt.id}" data-layer="${layerKey}">
+            <div class="flex items-start gap-3">
+              <span class="text-2xl">${opt.icon}</span>
+              <div class="flex-1">
+                <span class="font-bold text-white">${esc(opt.label)}</span>
+                <p class="text-xs text-muted mt-0.5">${esc(opt.desc)}</p>
+                <div class="flex flex-wrap gap-1.5 mt-2">
+                  ${Object.entries(opt.effects||{}).map(([k,v]) => fxTag(v, k)).join('')}
+                  ${opt.exposure ? `<span class="text-[10px] px-1.5 py-0.5 rounded ${opt.exposure>0?'bg-cyber/10 text-cyber':'bg-warn/10 text-warn'}">exposure ${opt.exposure>0?'+':''}${opt.exposure}</span>` : ''}
+                  ${opt.potential_bonus ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent">potential +${opt.potential_bonus}</span>` : ''}
+                  ${opt.morale_offset ? `<span class="text-[10px] px-1.5 py-0.5 rounded ${opt.morale_offset>0?'bg-good/10 text-good':'bg-bad/10 text-bad'}">morale ${opt.morale_offset>0?'+':''}${opt.morale_offset}</span>` : ''}
+                </div>
+              </div>
+            </div>
+          </button>`).join('')}
+      </div>`;
+  }
+
+  // ── Wire path card clicks ──────────────────────────────────────────────
+  function wirePathCards() {
+    const grid = m.querySelector('#path-cards-grid') || m;
+    grid.querySelectorAll('.journey-choice').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const pathId = btn.dataset.pathId;
+        const layerKey = btn.dataset.layer;
+        const layerIdx = layerKeys.indexOf(layerKey) + 1;
+        S.create.journey['layer' + layerIdx] = pathId;
+        const opt = (paths[layerKey]||[]).find(o => o.id === pathId);
+        if (opt) {
+          S.create.exposure += (opt.exposure || 0);
+          if (opt.morale_offset) S.create.youthEffects.morale = (S.create.youthEffects.morale || 0) + opt.morale_offset;
+          if (opt.potential_bonus) S.create.youthEffects.potential = (S.create.youthEffects.potential || 0) + opt.potential_bonus;
+        }
+        renderJourneyPage();
+      });
+    });
+  }
+
+  // ── Roll event for a layer ─────────────────────────────────────────────
+  async function rollEvent(layerNum, layerKey) {
+    try {
+      const event = await api('/journey/event', { method:'POST', body: JSON.stringify({ layer: layerKey }) });
+      S.create._journeyEvents[layerNum - 1] = event;
+    } catch(e) {
+      toast('Event roll failed','error');
+      S.create._journeyEvents[layerNum - 1] = { id:'noop', title:'A Quiet Day', icon:'☁️', text:'Nothing remarkable happened.', resolved_effects:{} };
+    }
+    renderJourneyPage();
+  }
+
+  // ── Show resolved event card ───────────────────────────────────────────
+  function showResolvedEvent(container, event, layerNum) {
+    const hasChoices = event.choices && event.choices.length > 0;
+    const choicePicked = event._choiceIndex !== undefined;
+    const medal = S.create._fibaResult?.medal;
+
+    container.innerHTML = `
+      <div class="event-card">
+        <div class="flex items-center gap-2.5 mb-2">
+          <span class="text-2xl">${event.icon || '📋'}</span>
+          <span class="font-bold text-white text-lg">${esc(event.title)}</span>
+        </div>
+        <p class="text-sm text-muted leading-relaxed mb-3">${esc(event.text)}</p>
+        <div id="ev-fx"></div>
+        ${hasChoices && !choicePicked ? `
+          <p class="text-xs text-accent font-semibold mb-2 mt-3">Choose your response:</p>
+          <div class="space-y-2" id="ev-choices">
+            ${event.choices.map((ch, i) => `
+              <button class="btn-secondary w-full text-left !py-3" data-ci="${i}">
+                <span class="text-sm">${esc(ch.text)}</span>
+                <div class="flex flex-wrap gap-1.5 mt-1.5">
+                  ${Object.entries(ch.effects||{}).map(([k,v]) => fxRangeTag(v, k)).join('')}
+                </div>
+              </button>`).join('')}
+          </div>` : ''}
+        ${(!hasChoices || choicePicked) ? `
+          <button class="btn-primary mt-4 w-full" id="ev-continue">Continue →</button>` : ''}
+      </div>`;
+
+    // Show effects for non-choice or already-picked choice
+    const fxEl = $('#ev-fx', container);
+    if (!hasChoices) {
+      // Non-choice: show resolved effects
+      let tags = Object.entries(event.resolved_effects||{}).map(([k,v]) => fxTag(v, k)).join('');
+      if (event.clout_bonus) tags += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent">clout +${event.clout_bonus}</span>`;
+      if (event.fan_base_bonus) tags += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-cyber/10 text-cyber">fan base +${event.fan_base_bonus}</span>`;
+      if (event.exposure_bonus) tags += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-cyber/10 text-cyber">exposure ${event.exposure_bonus>0?'+':''}${event.exposure_bonus}</span>`;
+      fxEl.innerHTML = `<div class="flex flex-wrap gap-1.5">${tags}</div>`;
+      $('#ev-continue').onclick = () => advanceLayer(layerNum);
+    } else if (choicePicked) {
+      // Choice already picked (back-navigation)
+      const ch = event.choices[event._choiceIndex];
+      fxEl.innerHTML = `<div class="flex flex-wrap gap-1.5 mt-1">
+        <p class="text-[10px] text-accent font-semibold mr-2 self-center">You chose: "${esc(ch.text)}"</p>
+        ${Object.entries(ch.effects||{}).map(([k,v]) => {
+          const val = Array.isArray(v) ? v[2] || v[1] : v;
+          return fxTag(val, k);
+        }).join('')}
+      </div>`;
+      $('#ev-continue').onclick = () => advanceLayer(layerNum);
+    }
+
+    // Wire choice buttons for unresolved choices
+    if (hasChoices && !choicePicked) {
+      $$('#ev-choices button', container).forEach(btn => {
+        btn.onclick = () => {
+          const ci = parseInt(btn.dataset.ci);
+          const chosen = event.choices[ci];
+          event._choiceIndex = ci;
+          // Resolve effects
+          const resolved = {};
+          for (const [k, v] of Object.entries(chosen.effects || {})) {
+            const val = Array.isArray(v) ? randInt(v[0], v[1]) : v;
+            resolved[k] = val;
+            S.create.youthEffects[k] = (S.create.youthEffects[k] || 0) + val;
+          }
+          if (event.exposure_bonus) S.create.exposure += event.exposure_bonus;
+          event.resolved_effects = resolved;
+          S.create._journeyEvents[layerNum - 1] = event;
+          // Show result
+          fxEl.innerHTML = `<div class="flex flex-wrap gap-1.5 mt-1">
+            <p class="text-[10px] text-accent font-semibold mr-2 self-center">You chose: "${esc(chosen.text)}"</p>
+            ${Object.entries(resolved).map(([k,v]) => fxTag(v, k)).join('')}
+          </div>`;
+          // Replace choices with continue button
+          const choicesEl = $('#ev-choices', container);
+          if (choicesEl) choicesEl.remove();
+          const card = container.querySelector('.event-card');
+          if (card && !$('#ev-continue', card)) {
+            card.insertAdjacentHTML('beforeend', '<button class="btn-primary mt-4 w-full" id="ev-continue">Continue →</button>');
+            $('#ev-continue').onclick = () => advanceLayer(layerNum);
+          }
+        };
+      });
+    }
+  }
+
+  // ── Advance to next layer ──────────────────────────────────────────────
+  function advanceLayer(layerNum) {
+    if (layerNum < 3) {
+      S.create._journeyLayer = layerNum + 1;
+    } else {
+      S.create._journeyLayer = 4; // Past all layers
+    }
+    renderJourneyPage();
+  }
+
+  // ── Final review (all 3 layers done) ───────────────────────────────────
+  function renderFinalReview() {
+    let html = '<div class="space-y-3 mb-4">';
+    for (let i = 0; i < 3; i++) {
+      const pid = S.create.journey['layer'+(i+1)];
+      if (!pid) continue;
+      const lk = layerKeys[i];
+      const opt = (paths[lk]||[]).find(o => o.id === pid);
+      if (!opt) continue;
+      const ev = S.create._journeyEvents[i];
+      html += `
+        <div class="bg-bg-hover border border-bg-border rounded-lg p-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xl">${opt.icon}</span>
+            <span class="font-bold text-white">${esc(opt.label)}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-good/10 text-good">✓ ${layerLabels[i]}</span>
+          </div>
+          <p class="text-xs text-muted">${esc(opt.desc)}</p>
+          ${ev ? `
+            <div class="mt-2 pt-2 border-t border-bg-border/50">
+              <p class="text-[10px] text-faint mb-1">${ev.icon || '📋'} <span class="text-muted">${esc(ev.title)}</span></p>
+              <div class="flex flex-wrap gap-1">
+                ${Object.entries(ev.resolved_effects||{}).map(([k,v]) => fxTag(v, k)).join('')}
+              </div>
+            </div>` : ''}
+        </div>`;
+    }
+    html += '</div>';
+
+    // Path label
+    const labels = ['layer1','layer2','layer3'].map(lid => pathLabelForId(S.create.journey[lid])).filter(Boolean);
+    S.create.pathLabel = labels.join(' → ');
+
+    return html;
+  }
+
+  // ── FIBA trigger ───────────────────────────────────────────────────────
+  function renderFibaTrigger() {
+    const fibaEl = $('#j-fiba');
+    if (!fibaEl) return;
+    fibaEl.innerHTML = `
+      <div class="event-card mt-4 mb-4" style="border-color:#06b6d440">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-2xl">🌍</span>
+          <span class="font-bold text-white text-lg">FIBA Youth Tournament Call-Up!</span>
+        </div>
+        <p class="text-sm text-muted mb-3">You've been selected to represent <b class="text-white">${esc(S.create.nationality || 'your country')}</b> at the FIBA U19 World Cup. This is your chance to put your name on the global stage.</p>
+        <button class="btn-primary w-full" id="fiba-play">🏆 Play in the Tournament →</button>
+      </div>`;
+    $('#fiba-play').onclick = () => runFiba();
+  }
+
+  async function runFiba() {
+    const fibaEl = $('#j-fiba');
+    fibaEl.innerHTML = `<div class="text-center py-5"><div class="spinner mx-auto mb-2"></div><p class="text-xs text-muted">Simulating FIBA U19 World Cup…</p></div>`;
+    try {
+      const roughAttrs = {};
+      for (const [k,v] of Object.entries(S.create.youthEffects)) roughAttrs[k] = 50 + v;
+      const result = await api('/journey/fiba', { method:'POST', body: JSON.stringify({
+        attrs: roughAttrs, nationality: S.create.nationality || 'USA', tournament: 'u19'
+      })});
+      // Compute and store bonuses
+      const expBonus = result.medal === 'gold' ? (result.ppg >= 20 ? 3 : 2) : result.medal ? 2 : (result.ppg >= 18 ? 1 : 0);
+      const moraleBonus = result.medal === 'gold' ? 5 : result.medal ? 3 : 0;
+      result._exposure = expBonus;
+      result._morale_bonus = moraleBonus;
+      S.create._fibaResult = result;
+      if (expBonus) S.create.exposure += expBonus;
+      if (moraleBonus) S.create.youthEffects.morale = (S.create.youthEffects.morale || 0) + moraleBonus;
+      renderFibaResult();
+    } catch(e) {
+      fibaEl.innerHTML = '<p class="text-xs text-bad mt-2">Tournament simulation failed.</p>';
+    }
+  }
+
+  function renderFibaResult() {
+    const fibaEl = $('#j-fiba');
+    if (!fibaEl || !S.create._fibaResult) return;
+    const r = S.create._fibaResult;
+    const medalEmoji = r.medal === 'gold' ? '🥇' : r.medal === 'silver' ? '🥈' : r.medal === 'bronze' ? '🥉' : '';
+    const medalLabel = r.medal ? r.medal.charAt(0).toUpperCase() + r.medal.slice(1) + ' Medal' : 'Eliminated';
+    const medalColor = r.medal === 'gold' ? 'text-accent' : r.medal ? 'text-warn' : 'text-faint';
+    fibaEl.innerHTML = `
+      <div class="event-card mt-4 mb-4" style="border-color:${r.medal ? '#f59e0b55' : '#3a3a55'}">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-2xl">${r.tournament_icon || '🌍'}</span>
+          <span class="font-bold text-white text-lg">${esc(r.tournament)}</span>
+          ${medalEmoji ? `<span class="text-2xl ml-auto">${medalEmoji}</span>` : ''}
+        </div>
+        <p class="text-sm ${medalColor} font-semibold mb-3">${medalLabel}</p>
+        <div class="grid grid-cols-3 gap-3 mb-3">
+          <div class="text-center bg-bg rounded-lg py-2.5">
+            <div class="mono text-xl font-bold text-accent">${r.ppg}</div><div class="text-[10px] text-muted">PPG</div>
+          </div>
+          <div class="text-center bg-bg rounded-lg py-2.5">
+            <div class="mono text-xl font-bold text-white">${r.rpg}</div><div class="text-[10px] text-muted">RPG</div>
+          </div>
+          <div class="text-center bg-bg rounded-lg py-2.5">
+            <div class="mono text-xl font-bold text-white">${r.apg}</div><div class="text-[10px] text-muted">APG</div>
+          </div>
+        </div>
+        <p class="text-sm text-muted leading-relaxed">${esc(r.narrative)}</p>
+        <div class="flex flex-wrap gap-1.5 mt-2">
+          ${r._morale_bonus ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-good/10 text-good">morale +${r._morale_bonus}</span>` : ''}
+          ${r._exposure ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-cyber/10 text-cyber">exposure +${r._exposure}</span>` : ''}
+        </div>
+      </div>`;
+  }
+
+  // ── Synergy check ──────────────────────────────────────────────────────
+  async function checkSynergy() {
+    try {
+      const syn = await api('/journey/synergy', { method:'POST', body: JSON.stringify({
+        layer1: S.create.journey.layer1, layer2: S.create.journey.layer2, layer3: S.create.journey.layer3
+      })});
+      if (syn && syn.id) {
+        S.create._synergy = syn;
+        for (const [k,v] of Object.entries(syn.effects||{})) {
+          S.create.youthEffects[k] = (S.create.youthEffects[k]||0) + v;
+        }
+      } else {
+        S.create._synergy = { id: null };
+      }
+    } catch(e) {
+      S.create._synergy = { id: null };
+    }
+  }
+
+  function renderSynergy() {
+    const el = $('#j-synergy');
+    if (!el || !S.create._synergy || !S.create._synergy.id) return;
+    const syn = S.create._synergy;
+    el.innerHTML = `
+      <div class="synergy-badge mt-4 mb-2">
+        <p class="text-sm font-bold text-accent">🔗 ${esc(syn.label)}</p>
+        <p class="text-xs text-muted mt-0.5">${esc(syn.desc)}</p>
+        <div class="flex flex-wrap gap-1.5 mt-2">
+          ${Object.entries(syn.effects||{}).map(([k,v]) => `<span class="text-[10px] px-1.5 py-0.5 rounded bg-good/10 text-good">${fxLabel(k)} +${v}</span>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  // ── Running summary panel ──────────────────────────────────────────────
+  function renderSummary(fxEntries, totalExp) {
+    const sumEl = $('#j-summary');
+    if (!sumEl) return;
+    if (!fxEntries.length && !totalExp) { sumEl.innerHTML = ''; return; }
+    const expPct = Math.max(5, Math.min(100, (totalExp + 5) * 10));
+    const expColor = totalExp >= 3 ? '#34d399' : totalExp >= 1 ? '#06b6d4' : totalExp <= -2 ? '#f87171' : '#f59e0b';
+    sumEl.innerHTML = `
+      <div class="bg-bg-hover border border-bg-border rounded-lg p-4 mt-4">
+        <div class="flex items-center justify-between mb-2">
+          <p class="text-xs font-semibold text-gray-200">📊 Journey Effects</p>
+          <span class="text-[10px] text-faint">Accumulated bonuses</span>
+        </div>
+        ${fxEntries.length ? `
+          <div class="flex flex-wrap gap-1.5 mb-3">
+            ${fxEntries.map(([k,v]) => fxTag(v, k)).join('')}
+          </div>` : ''}
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[10px] text-muted">📣 Exposure</span>
+            <span class="mono text-[10px] font-bold ${totalExp>=2?'text-good':totalExp<=-2?'text-bad':'text-faint'}">${totalExp>=0?'+':''}${totalExp}</span>
+          </div>
+          <div class="exposure-bar">
+            <div class="exposure-fill" style="width:${expPct}%;background:${expColor}"></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // ── Navigation wiring ──────────────────────────────────────────────────
+  function wireNavigation(journeyDone) {
+    const backBtn = $('#c-back-journey');
+    const nextBtn = $('#c-next-journey');
+    if (backBtn) backBtn.onclick = () => { S.create._step = 1; renderCreate($('#main')); };
+    if (!nextBtn) return;
+
+    if (journeyDone) {
+      nextBtn.disabled = false;
+      nextBtn.textContent = 'Continue →';
+      nextBtn.onclick = () => {
+        // Compute path label
+        const labels = ['layer1','layer2','layer3'].map(lid => pathLabelForId(S.create.journey[lid])).filter(Boolean);
+        S.create.pathLabel = labels.join(' → ');
+        S.create._step = 3;
+        S.create.allocs = {};
+        renderCreate($('#main'));
+      };
+    } else {
+      nextBtn.disabled = true;
+      nextBtn.textContent = 'Complete all layers first';
+    }
+  }
+}
+
+// === BUILD STEP (formerly step 2, now step 3) ===
 function renderCreateStep2(m) {
   const pos = S.create.position;
   const profiles = { PG:[1.83,1.96,77,93], SG:[1.91,2.03,84,102], SF:[1.98,2.08,93,112], PF:[2.03,2.13,102,122], C:[2.08,2.21,109,136] };
@@ -495,8 +1064,8 @@ function renderCreateStep2(m) {
     </div>`;
   $('#c-height').oninput = e => { S.create.height = parseFloat(e.target.value); $('#c-height-val').textContent = S.create.height.toFixed(2)+'m'; };
   $('#c-weight').oninput = e => { S.create.weight = parseInt(e.target.value); $('#c-weight-val').textContent = S.create.weight+'kg'; };
-  $('#c-back2').onclick = () => { S.create._step = 1; renderCreate($('#main')); };
-  $('#c-next2').onclick = () => { S.create._step = 3; renderCreate($('#main')); };
+  $('#c-back2').onclick = () => { S.create._step = 2; renderCreate($('#main')); };
+  $('#c-next2').onclick = () => { S.create._step = 4; renderCreate($('#main')); };
 }
 
 function renderCreateStep3(m) {
@@ -516,11 +1085,12 @@ function renderCreateStep3(m) {
       </div>
     </div>`;
 
-  $('#c-back3').onclick = () => { S.create._step = 2; renderCreate($('#main')); };
-  $('#c-next3').onclick = () => { S.create._step = 4; renderCreate($('#main')); };
+  $('#c-back3').onclick = () => { S.create._step = 3; renderCreate($('#main')); };
+  $('#c-next3').onclick = () => { S.create._step = 5; renderCreate($('#main')); };
 
-  // Fetch point pool
-  api(`/draft/point-pool?position=${S.create.position}&height=${S.create.height}&weight=${S.create.weight}`).then(pool => {
+  // Fetch point pool (with path bonus from journey exposure)
+  const pathBonus = S.create.exposure >= 3 ? 8 : S.create.exposure >= 1 ? 4 : 0;
+  api(`/draft/point-pool?position=${S.create.position}&height=${S.create.height}&weight=${S.create.weight}&path_bonus=${pathBonus}`).then(pool => {
     S.create._pool = pool;
     $('#c-pool-note').textContent = `You have ${pool.total_points} points to distribute.`;
 
@@ -601,23 +1171,196 @@ function renderCreateStep3(m) {
   });
 }
 
+// === COMBINE STEP (step 5) ===
+async function renderCreateStep5_Combine(m) {
+  // Run combine simulation if not done yet
+  if (!S.create.combineResult) {
+    m.innerHTML = '<div class="card p-6 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-muted">Running combine drills…</p></div>';
+    try {
+      // Build rough attrs from journey effects + allocations
+      const roughAttrs = {};
+      for (const [k,v] of Object.entries(S.create.youthEffects)) roughAttrs[k] = 50 + v;
+      S.create.combineResult = await api('/combine/simulate', { method:'POST', body: JSON.stringify({ attrs: roughAttrs }) });
+    } catch(e) { toast('Combine simulation failed','error'); S.create.combineResult = { measurements:{agility:50,sprint:50,vert:50,bench:50}, shooting:{spot_up:50,off_dribble:50}, scrimmage:50, combine_score:50, combine_swing:0 }; }
+  }
+  const c = S.create.combineResult;
+  S.create.combineSwing = c.combine_swing || 0;
+
+  // Load workout teams if not done
+  if (!S.create._workoutOptions) {
+    try {
+      const data = await api('/combine/workouts');
+      S.create._workoutOptions = data.teams;
+    } catch(e) { S.create._workoutOptions = []; }
+  }
+  const workoutOpts = S.create._workoutOptions || [];
+  const selected = S.create.workoutTeams || [];
+  const results = S.create.workoutResults || [];
+
+  const gradeClass = (v) => v >= 75 ? 'text-good' : v <= 40 ? 'text-bad' : 'text-white';
+  const barColor = (v) => v >= 75 ? '#34d399' : v <= 40 ? '#f87171' : '#f59e0b';
+
+  m.innerHTML = `
+    <div class="card p-6">
+      <h2 class="text-xl font-bold text-white mb-1">NBA Draft Combine</h2>
+      <p class="text-sm text-muted mb-5">Physical testing, shooting drills, and a 5-on-5 scrimmage. This is where you prove yourself.</p>
+
+      <!-- Combine Results -->
+      <div class="bg-bg-hover border border-bg-border rounded-lg p-4 mb-4">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm font-semibold text-white">📋 Combine Results</span>
+          <span class="mono text-lg font-bold ${c.combine_score>=70?'text-good':c.combine_score>=55?'text-accent':'text-bad'}">${c.combine_score}</span>
+        </div>
+        <div class="space-y-2">
+          ${Object.entries(c.measurements).map(([k,v]) => `
+            <div class="flex items-center gap-3">
+              <span class="combine-bar-label">${k.replace(/_/g,' ')}</span>
+              <div class="combine-bar-track"><div class="combine-bar-fill" style="width:${v}%;background:${barColor(v)}"></div></div>
+              <span class="mono text-xs font-bold ${gradeClass(v)} w-8 text-right">${v}</span>
+            </div>
+          `).join('')}
+          <div class="border-t border-bg-border my-2"></div>
+          ${Object.entries(c.shooting).map(([k,v]) => `
+            <div class="flex items-center gap-3">
+              <span class="combine-bar-label">${k.replace(/_/g,' ')}</span>
+              <div class="combine-bar-track"><div class="combine-bar-fill" style="width:${v}%;background:${barColor(v)}"></div></div>
+              <span class="mono text-xs font-bold ${gradeClass(v)} w-8 text-right">${v}</span>
+            </div>
+          `).join('')}
+          <div class="border-t border-bg-border my-2"></div>
+          <div class="flex items-center gap-3">
+            <span class="combine-bar-label">scrimmage</span>
+            <div class="combine-bar-track"><div class="combine-bar-fill" style="width:${c.scrimmage}%;background:${barColor(c.scrimmage)}"></div></div>
+            <span class="mono text-xs font-bold ${gradeClass(c.scrimmage)} w-8 text-right">${c.scrimmage}</span>
+          </div>
+        </div>
+        <p class="text-xs text-faint mt-3">Combine swing: <span class="${c.combine_swing>=0?'text-good':'text-bad'} font-bold">${c.combine_swing>=0?'+':''}${c.combine_swing}</span></p>
+      </div>
+
+      <!-- Flashback moment -->
+      <div class="scout-notebook mb-4">${getCombineFlashback()}</div>
+
+      <!-- Team Workouts -->
+      <div class="mb-4">
+        <p class="text-sm font-semibold text-white mb-2">🏋️ Select 2-3 Team Workouts</p>
+        <p class="text-xs text-muted mb-3">Pick teams to work out for. A good showing can boost your draft stock with that team.</p>
+        <div class="grid grid-cols-2 gap-2" id="workout-grid">
+          ${workoutOpts.map(t => {
+            const isSelected = selected.includes(t.id);
+            const result = results.find(r => r.team_abbr === t.abbr);
+            return `
+              <button class="workout-card card ${isSelected?'selected':''} p-3 text-left ${result?'flipped':''}" data-team-id="${t.id}" ${result?'disabled':''}>
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-white text-sm">${esc(t.abbr)}</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg text-faint">OVR ${t.ovr}</span>
+                </div>
+                <p class="text-[10px] text-muted mt-0.5">${esc(t.name)}</p>
+                <p class="text-[10px] text-faint">Needs: ${t.need}</p>
+                ${result ? `<p class="text-xs mt-2 ${result.result==='impressed'?'text-good':result.result==='disappointing'?'text-bad':'text-muted'}">${esc(result.narrative)}</p>` : ''}
+              </button>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- Mock Draft Projection -->
+      <div class="bg-bg-hover border border-bg-border rounded-lg p-4 mb-4">
+        <p class="text-xs font-semibold text-gray-200 mb-2">📈 Draft Projection</p>
+        <p class="text-sm text-muted">Based on your combine performance and exposure:
+          <span class="font-bold ${S.create.exposure + S.create.combineSwing >= 3 ? 'text-good' : S.create.exposure + S.create.combineSwing <= -3 ? 'text-bad' : 'text-accent'}">
+            ${getDraftProjection()}
+          </span>
+        </p>
+      </div>
+
+      <!-- Navigation -->
+      <div class="mt-6 flex justify-between">
+        <button class="btn-secondary" id="c-back-combine">← Back</button>
+        <button class="btn-primary" id="c-next-combine">Draft Night →</button>
+      </div>
+    </div>`;
+
+  // Wire workout selection
+  $$('.workout-card:not(.flipped)', m).forEach(card => {
+    card.onclick = async () => {
+      const teamId = parseInt(card.dataset.teamId);
+      if (selected.includes(teamId)) {
+        // Deselect
+        S.create.workoutTeams = selected.filter(id => id !== teamId);
+        S.create.workoutResults = results.filter(r => r.team_abbr !== workoutOpts.find(t => t.id === teamId)?.abbr);
+        renderCreateStep5_Combine(m);
+        return;
+      }
+      if (selected.length >= 3) { toast('You can only work out for 3 teams','warn'); return; }
+      // Select and simulate
+      S.create.workoutTeams.push(teamId);
+      card.classList.add('selected');
+      card.innerHTML += '<div class="text-center mt-2"><div class="spinner mx-auto"></div></div>';
+      try {
+        const roughAttrs = {};
+        for (const [k,v] of Object.entries(S.create.youthEffects)) roughAttrs[k] = 50 + v;
+        const res = await api('/combine/workout-result', { method:'POST', body: JSON.stringify({ teamId, attrs: roughAttrs }) });
+        S.create.workoutResults.push(res);
+        S.create.combineSwing += res.result === 'impressed' ? 1 : res.result === 'disappointing' ? -1 : 0;
+      } catch(e) { /* workout failed silently */ }
+      renderCreateStep5_Combine(m);
+    };
+  });
+
+  $('#c-back-combine').onclick = () => { S.create._step = 4; renderCreate($('#main')); };
+  $('#c-next-combine').onclick = () => { S.create._step = 6; renderCreate($('#main')); };
+}
+
+function getCombineFlashback() {
+  const j = S.create.journey;
+  if (j.layer1 === 'street') return '"Remember those cracked courts where you first learned to play? Now you\'re running drills at the NBA Combine."';
+  if (j.layer1 === 'club_academy') return '"The academy directors would be proud — their investment is paying off on the biggest stage."';
+  if (j.layer1 === 'sports_school') return '"From the 5 AM drills at the sports school to the NBA Combine. The journey was worth it."';
+  if (j.layer2 === 'overseas_early' || j.layer2 === 'move_abroad') return '"Leaving home was the hardest thing you ever did. But look where it brought you."';
+  if (j.layer3 === 'euroleague') return '"You\'ve already played against professionals in the EuroLeague. The Combine feels almost familiar."';
+  if (j.layer3 === 'gleague') return '"The G-League taught you how to compete against grown men. This is just another test."';
+  return '"Everything you\'ve worked for comes down to moments like these. Make them count."';
+}
+
+function getDraftProjection() {
+  const score = S.create.exposure + S.create.combineSwing;
+  if (score >= 8) return 'Lottery pick (Top 14)';
+  if (score >= 4) return 'First round (15-30)';
+  if (score >= 0) return 'Early second round (31-45)';
+  if (score >= -4) return 'Late second round (45-60)';
+  return 'On the bubble / undrafted';
+}
+
 function renderDraftNight(m) {
+  const pathNarrative = getPathNarrative();
   m.innerHTML = `
     <div class="card p-8 text-center" id="draft-panel">
       <div class="text-5xl mb-3">🎟️</div>
       <h2 class="text-2xl font-bold text-white mb-2">NBA Draft Night</h2>
-      <p class="text-muted mb-6">${esc(S.create.name)}, the draft is about to begin. Your combine results and college career will determine where you land.</p>
-      <button class="btn-primary" id="draft-start">Enter the Draft</button>
+      <p class="text-muted mb-2">${esc(S.create.name)}, the draft is about to begin.</p>
+      ${pathNarrative ? `<p class="text-sm text-cyber mb-4 italic">"${esc(pathNarrative)}"</p>` : '<p class="text-muted mb-4">Your combine results and journey will determine where you land.</p>'}
+      <div class="flex justify-center gap-3">
+        <button class="btn-secondary" id="draft-back">← Back to Combine</button>
+        <button class="btn-primary" id="draft-start">Enter the Draft</button>
+      </div>
     </div>`;
+  $('#draft-back').onclick = () => { S.create._step = 5; renderCreate($('#main')); };
   $('#draft-start').onclick = async () => {
     $('#draft-panel').innerHTML = `<div class="py-10 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-muted">Creating your player…</p></div>`;
     try {
+      // Build journey entries for career_progress
+      const journeyEntries = buildJourneyEntries();
       const res = await api('/player/create', { method:'POST', body: JSON.stringify({
         name:S.create.name, position:S.create.position, age:S.create.age,
         height:S.create.height, weight:S.create.weight, allocations:S.create.allocs,
         luck_bonus: S.create._pool?.luck_bonus ?? null,
         background: S.create.background || 'small_town',
-        nationality: S.create.nationality || 'USA'
+        nationality: S.create.nationality || 'USA',
+        youthEffects: S.create.youthEffects || {},
+        exposure: S.create.exposure || 0,
+        pathLabel: S.create.pathLabel || '',
+        journeyEntries,
+        combineSwing: S.create.combineSwing || 0,
+        workoutTeams: S.create.workoutTeams || []
       })});
       S.playerId = res.player_id; S.player = res.player; localStorage.setItem('bball_pid', res.player_id);
       await refreshSeason();
@@ -627,7 +1370,8 @@ function renderDraftNight(m) {
       $('#draft-panel').innerHTML = `
         <div class="text-5xl mb-3">📋</div>
         <h2 class="text-xl font-bold text-white mb-1">Draft Scouting Report</h2>
-        <p class="text-muted mb-4">Your projected pick: <b class="text-accent">#${preview.projection}</b> · Your combine grade: <b class="text-accent">${preview.player_overall}</b></p>
+        <p class="text-muted mb-2">Your projected pick: <b class="text-accent">#${preview.projection}</b> · Your combine grade: <b class="text-accent">${preview.player_overall}</b></p>
+        ${S.create.nationality && S.create.nationality !== 'USA' ? `<p class="text-xs text-cyber mb-3">${getNationalityFlag(S.create.nationality)} International prospect from ${S.create.nationality}</p>` : ''}
         <div class="overflow-x-auto mb-4"><table class="w-full text-xs">
           <thead><tr class="text-muted border-b border-bg-border text-left">
             <th class="py-1.5 pr-2">#</th><th class="pr-2">Name</th><th class="pr-2">Pos</th><th class="pr-2 text-center">OVR</th><th class="pr-2 text-center">Pot</th>
@@ -650,10 +1394,65 @@ function renderDraftNight(m) {
 async function runDraft() {
   $('#draft-panel').innerHTML = `<div class="py-10 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-muted">Simulating draft lottery…</p></div>`;
   try {
-    const draft = await api(`/draft/simulate/${S.playerId}`, { method:'POST' });
+    const draft = await api(`/draft/simulate/${S.playerId}`, { method:'POST', body: JSON.stringify({
+      exposure: S.create.exposure || 0,
+      combineSwing: S.create.combineSwing || 0,
+      workoutTeams: S.create.workoutTeams || []
+    })});
     resetCreate();
     showDraftResult(draft);
   } catch(e) { toast('Draft failed: '+e.message,'error'); renderCreate($('#main')); }
+}
+
+function getPathNarrative() {
+  const j = S.create.journey;
+  const nat = S.create.nationality || 'USA';
+  const parts = [];
+  if (j.layer1 === 'street') parts.push('a streetball legend');
+  else if (j.layer1 === 'aau' || j.layer1 === 'club_academy') parts.push('a product of elite development');
+  else if (j.layer1 === 'sports_school') parts.push('forged in the sports school system');
+  if (j.layer3 === 'ncaa_d1') parts.push('who shined on the NCAA stage');
+  else if (j.layer3 === 'euroleague') parts.push('who battled in the EuroLeague');
+  else if (j.layer3 === 'gleague') parts.push('who proved himself in the G-League');
+  else if (j.layer3 === 'cba') parts.push('who dominated the CBA');
+  if (nat !== 'USA') parts.push(`from ${nat}`);
+  if (!parts.length) return '';
+  return parts.join(', ') + ' — tonight, the dream becomes real.';
+}
+
+function buildJourneyEntries() {
+  const entries = [];
+  const nat = S.create.nationality || 'USA';
+  const paths = S.create._journeyPaths;
+  const labels = { childhood: 'Grew up', teen: 'Developed', predraft: 'Pre-draft' };
+  entries.push(`Born in ${nat}.`);
+  if (paths) {
+    for (const [i, key] of ['childhood','teen','predraft'].entries()) {
+      const choice = S.create.journey['layer'+(i+1)];
+      if (choice && paths[key]) {
+        const opt = paths[key].find(o => o.id === choice);
+        if (opt) entries.push(`${labels[key]} through: ${opt.label}.`);
+      }
+    }
+  }
+  if (S.create._fibaResult) {
+    const r = S.create._fibaResult;
+    const medalStr = r.medal ? `, ${r.medal} medal` : '';
+    entries.push(`Represented ${nat} at ${r.tournament}${medalStr} — ${r.ppg} PPG, ${r.rpg} RPG, ${r.apg} APG.`);
+  }
+  if (S.create.combineResult) {
+    entries.push(`NBA Draft Combine score: ${S.create.combineResult.combine_score}.`);
+  }
+  if (S.create.workoutTeams.length) {
+    const names = S.create.workoutResults.map(r => r.team || r.team_abbr);
+    if (names.length) entries.push(`Worked out for: ${names.join(', ')}.`);
+  }
+  return entries;
+}
+
+function getNationalityFlag(nat) {
+  const flags = { USA:'🇺🇸', Canada:'🇨🇦', France:'🇫🇷', Spain:'🇪🇸', Serbia:'🇷🇸', Greece:'🇬🇷', Germany:'🇩🇪', Australia:'🇦🇺', China:'🇨🇳', Argentina:'🇦🇷', Lithuania:'🇱🇹', Slovenia:'🇸🇮', Brazil:'🇧🇷', Japan:'🇯🇵', Nigeria:'🇳🇬', Italy:'🇮🇹' };
+  return flags[nat] || '🌍';
 }
 
 function ord(n) { const s=['th','st','nd','rd'], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }

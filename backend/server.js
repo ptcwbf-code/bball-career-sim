@@ -293,6 +293,371 @@ const BACKGROUNDS = {
     effects: { potential: 8, vertical_jump: 2, bbiq: -2, composure: -2 } },
 };
 
+// ------------------------------------------------------------
+// Pre-NBA Journey system
+// ------------------------------------------------------------
+// Route groups — nationality determines which journey paths are available.
+const ROUTE_GROUPS = {
+  USA: ['USA', 'Canada'],
+  China: ['China'],
+  Europe: ['France', 'Spain', 'Serbia', 'Greece', 'Germany', 'Lithuania', 'Slovenia', 'Italy'],
+  Global: ['Australia', 'Argentina', 'Brazil', 'Japan', 'Nigeria'],
+};
+function getRouteGroup(nationality) {
+  for (const [group, countries] of Object.entries(ROUTE_GROUPS)) {
+    if (countries.includes(nationality)) return group;
+  }
+  return 'Global';
+}
+
+// Journey path options — 3 layers × 4 route groups.
+// Each option: { id, label, icon, desc, effects, exposure, potential_bonus, morale_offset }
+const JOURNEY_PATHS = {
+  USA: {
+    childhood: [
+      { id: 'aau', label: 'AAU Circuit', icon: '🏟️',
+        desc: 'Age 10, touring the national AAU circuit against the best kids in America.',
+        effects: { catch_shoot_3pt: 2, off_ball: 2, bbiq: 1 }, exposure: 1 },
+      { id: 'street', label: 'Streetball', icon: '🏀',
+        desc: 'No coaches, no refs — just cracked concrete and pure instinct.',
+        effects: { finishing: 3, first_step: 2, ball_security: -2, bbiq: -1 }, potential_bonus: 2 },
+      { id: 'hs_team', label: 'High School Team', icon: '🏫',
+        desc: 'The normal path — school gym, structured practice, Friday night lights.',
+        effects: { composure: 2, work_ethic: 1 } },
+    ],
+    teen: [
+      { id: 'hs_star', label: 'High School Star', icon: '⭐',
+        desc: 'Ranked nationally. Every college coach has your number.',
+        effects: { off_ball: 1, composure: 2 }, exposure: 2 },
+      { id: 'multi_sport', label: 'Multi-Sport Athlete', icon: '🏈',
+        desc: 'Football, track, basketball — you did it all. Your body is a machine.',
+        effects: { vertical_jump: 2, speed: 2, stamina: 2, catch_shoot_3pt: -1 } },
+      { id: 'focused', label: 'Basketball Only', icon: '🎯',
+        desc: 'Every waking hour on the court. Shooting drills at 6 AM, film at 10 PM.',
+        effects: { catch_shoot_3pt: 2, pnr_vision: 1, finishing: 1 } },
+    ],
+    predraft: [
+      { id: 'ncaa_d1', label: 'NCAA Division I', icon: '🎓',
+        desc: 'The biggest stage in college ball. National TV, March Madness, packed arenas.',
+        effects: { bbiq: 1, composure: 1 }, exposure: 3 },
+      { id: 'ncaa_lower', label: 'NCAA D2/D3', icon: '🏫',
+        desc: 'Small school, small crowds — but you dominated every night.',
+        effects: { work_ethic: 2, composure: 2 }, exposure: -3 },
+      { id: 'gleague', label: 'G-League Ignite', icon: '🔥',
+        desc: 'Skipped college. Playing against grown men for a paycheck.',
+        effects: { finishing: 2, first_step: 1 }, exposure: 0 },
+    ],
+  },
+  China: {
+    childhood: [
+      { id: 'sports_school', label: '体校 (Sports School)', icon: '🇨🇳',
+        desc: 'Enrolled in a provincial sports school at age 8. Military-style training, no days off.',
+        effects: { stamina: 3, strength: 2, composure: -2 } },
+      { id: 'school_ball', label: '校园篮球 (School Ball)', icon: '🏫',
+        desc: 'Regular school by day, basketball by afternoon. Balanced but less exposure.',
+        effects: { bbiq: 1, composure: 2 }, exposure: -1 },
+      { id: 'private', label: '私立训练营 (Private Academy)', icon: '💰',
+        desc: 'Family invested everything in a top basketball academy. The pressure is real.',
+        effects: { catch_shoot_3pt: 2, mid_range: 2 }, morale_offset: -3 },
+    ],
+    teen: [
+      { id: 'cba_youth', label: 'CBA 青年队', icon: '🏀',
+        desc: 'Training with CBA club youth team. Playing against men twice your age.',
+        effects: { bbiq: 3, composure: 2, mid_range: 1 }, exposure: 1 },
+      { id: 'stay_school', label: '继续校园篮球', icon: '🏫',
+        desc: 'Stayed in the school system, competing in national high school tournaments.',
+        effects: { composure: 1, work_ethic: 2 } },
+      { id: 'overseas_early', label: '少年留洋 (Overseas at 15)', icon: '✈️',
+        desc: 'Sent to Australia/Europe alone at 15. Culture shock, homesickness — and growth.',
+        effects: { composure: -1, bbiq: 2, mid_range: 2 }, exposure: 1, morale_offset: -5 },
+    ],
+    predraft: [
+      { id: 'cba', label: 'CBA 一队', icon: '🏀',
+        desc: 'Domestic league star. CBA All-Star. But NBA scouts rarely watch Chinese basketball.',
+        effects: { mid_range: 2, composure: 2 }, exposure: -2 },
+      { id: 'nbl', label: 'NBL (Australia)', icon: '🇦🇺',
+        desc: 'Moved to the NBL for visibility. NBA scouts follow this league closely.',
+        effects: { bbiq: 2, composure: 1 }, exposure: 1 },
+      { id: 'ncaa_us', label: 'NCAA (USA)', icon: '🎓',
+        desc: 'Crossed the Pacific to play college ball. A bold gamble for draft exposure.',
+        effects: { catch_shoot_3pt: 1, bbiq: 1 }, exposure: 3, morale_offset: -8 },
+      { id: 'draft_direct', label: '直接参选 (Direct Draft Entry)', icon: '🎟️',
+        desc: 'The rarest path — declaring for the draft with no overseas or college resume.',
+        exposure: -1 },
+    ],
+  },
+  Europe: {
+    childhood: [
+      { id: 'club_academy', label: 'Club Academy', icon: '🏟️',
+        desc: 'Joined a top club\'s youth system — Barcelona, Real Madrid, Olympiacos.',
+        effects: { bbiq: 3, composure: 2, passing_accuracy: 1 }, exposure: 1 },
+      { id: 'dual_track', label: 'School + Club', icon: '🏫',
+        desc: 'School in the morning, club training in the afternoon. Best of both worlds.',
+        effects: { bbiq: 1, leadership: 2 } },
+      { id: 'street', label: 'Streetball', icon: '🏀',
+        desc: 'Outdoor courts, playground legends. No system, all heart.',
+        effects: { finishing: 3, first_step: 2, ball_security: -2 }, potential_bonus: 3 },
+    ],
+    teen: [
+      { id: 'youth_league', label: 'Youth League Starter', icon: '⭐',
+        desc: 'Starting in the national youth league. Scouts from every Euro club are watching.',
+        effects: { catch_shoot_3pt: 1, composure: 2 }, exposure: 1 },
+      { id: 'train_with_first', label: 'Train with Senior Team', icon: '🏟️',
+        desc: 'Still a kid, but practicing with the first team every day. Trial by fire.',
+        effects: { bbiq: 3, composure: 1 } },
+      { id: 'loan', label: 'Loan to Lower Division', icon: '🔄',
+        desc: 'Loaned out to a smaller club. You\'re the go-to guy for the first time.',
+        effects: { leadership: 2, finishing: 2 } },
+    ],
+    predraft: [
+      { id: 'domestic_first', label: 'Domestic League First Team', icon: '🏟️',
+        desc: 'Regular rotation in your country\'s top league. Steady, not spectacular.',
+        effects: { composure: 2, bbiq: 1 }, exposure: -1 },
+      { id: 'euroleague', label: 'EuroLeague', icon: '🌟',
+        desc: 'The Champions League of basketball. The whole world is watching.',
+        effects: { bbiq: 2, composure: 2, pnr_vision: 1 }, exposure: 3 },
+      { id: 'ncaa_us', label: 'NCAA (USA)', icon: '🎓',
+        desc: 'Left Europe for American college ball. A different game, a bigger stage.',
+        effects: { catch_shoot_3pt: 1, bbiq: 1 }, exposure: 3, morale_offset: -6 },
+    ],
+  },
+  Global: {
+    childhood: [
+      { id: 'street', label: 'Streetball', icon: '🏀',
+        desc: 'Found basketball on an outdoor court. Raw talent, no coaching, pure hunger.',
+        effects: { finishing: 3, first_step: 2, ball_security: -2 }, potential_bonus: 3 },
+      { id: 'youth_club', label: 'Youth Club', icon: '🏟️',
+        desc: 'Joined the local club\'s youth program. Your first real team.',
+        effects: { bbiq: 2, composure: 1 } },
+      { id: 'school', label: 'School Ball', icon: '🏫',
+        desc: 'School basketball team. Nothing fancy — just hard work and fundamentals.',
+        effects: { composure: 2, work_ethic: 1 } },
+    ],
+    teen: [
+      { id: 'national_junior', label: 'National Junior Team', icon: '🌍',
+        desc: 'Selected for the national U-17 team. FIBA tournaments, international spotlight.',
+        effects: { bbiq: 2, composure: 2 }, exposure: 2 },
+      { id: 'local_league', label: 'Local League', icon: '🏀',
+        desc: 'Playing in the domestic league at 16. Competing against grown men.',
+        effects: { finishing: 2, strength: 1 } },
+      { id: 'move_abroad', label: 'Move Abroad', icon: '✈️',
+        desc: 'Left home for Australia, Europe, or the US. Alone, but chasing the dream.',
+        effects: { composure: -1, bbiq: 2, work_ethic: 2 }, exposure: 1 },
+    ],
+    predraft: [
+      { id: 'local_pro', label: 'Local Professional League', icon: '🏀',
+        desc: 'Star of your country\'s pro league. Respected at home, unknown abroad.',
+        effects: { composure: 2, mid_range: 1 }, exposure: -2 },
+      { id: 'nbl', label: 'NBL (Australia)', icon: '🇦🇺',
+        desc: 'The NBL is a proven path to the NBA. Scouts watch every game.',
+        effects: { bbiq: 2 }, exposure: 1 },
+      { id: 'ncaa_us', label: 'NCAA (USA)', icon: '🎓',
+        desc: 'American college ball — the most visible stage in the world.',
+        effects: { catch_shoot_3pt: 1 }, exposure: 3 },
+    ],
+  },
+};
+
+// Path synergy bonuses — certain 3-layer combos unlock small bonus effects.
+const PATH_SYNERGIES = [
+  { id: 'unconventional', label: 'The Unconventional Path',
+    match: { 0: ['street'], 1: ['multi_sport'], 2: ['gleague'] },
+    effects: { clutch_factor: 2, composure: 1 },
+    desc: 'Streetball roots, multi-sport athleticism, G-League toughness — you forged your own way.' },
+  { id: 'european_pipeline', label: 'European Pipeline',
+    match: { 0: ['club_academy'], 1: ['youth_league', 'train_with_first'], 2: ['euroleague'] },
+    effects: { bbiq: 2, passing_accuracy: 1 },
+    desc: 'From club academy to EuroLeague — the most refined development path in basketball.' },
+  { id: 'global_nomad', label: 'Global Nomad',
+    match: { 0: ['street', 'youth_club'], 1: ['move_abroad', 'national_junior'], 2: ['nbl', 'ncaa_us'] },
+    effects: { composure: 2, work_ethic: 2 },
+    desc: 'Crossed oceans and cultures to chase basketball. The adversity built character.' },
+  { id: 'chinese_dream', label: '中国梦 (China Dream)',
+    match: { 0: ['sports_school', 'private'], 1: ['cba_youth', 'overseas_early'], 2: ['cba', 'nbl', 'ncaa_us'] },
+    effects: { stamina: 1, mid_range: 1, composure: 1 },
+    desc: 'The Chinese basketball pipeline — disciplined, technical, relentless.' },
+  { id: 'polished_pro', label: 'Polished Professional',
+    match: { 0: ['club_academy', 'hs_team'], 1: ['hs_star', 'youth_league'], 2: ['ncaa_d1', 'euroleague'] },
+    effects: { bbiq: 1, composure: 2 },
+    desc: 'Every step was the "right" choice. You\'re as ready as a rookie can be.' },
+];
+
+// Random life events — one per layer, rolled after each choice.
+const CHILDHOOD_EVENTS = [
+  { id: 'coach_notice', title: 'A Coach Notices You', icon: '👀',
+    text: 'A local coach saw you play and offered to train you for free. You started learning the game the right way.',
+    effects: { work_ethic: [0, 2], bbiq: [0, 1] } },
+  { id: 'family_hardship', title: 'Family Hardship', icon: '💔',
+    text: 'Money was tight. You almost had to quit basketball to help at home.',
+    choices: [
+      { text: 'Keep playing — basketball is my way out.', effects: { work_ethic: [1, 3], morale: [-3, -1] } },
+      { text: 'Help the family first.', effects: { composure: [1, 2], morale: [-1, 0] } },
+    ] },
+  { id: 'first_injury', title: 'First Real Injury', icon: '🏥',
+    text: 'A bad ankle sprain at 11 kept you out for months. The recovery taught you patience.',
+    effects: { durability: [1, 2], composure: [1, 2] } },
+  { id: 'idol', title: 'Meeting Your Idol', icon: '🌟',
+    text: 'You met a professional basketball player at a camp. He told you to never stop working.',
+    effects: { morale: [3, 6], work_ethic: [0, 2] } },
+  { id: 'natural', title: 'Natural Gift', icon: '✨',
+    text: "Everyone said you were the most talented kid they'd ever seen. It went to your head a little.",
+    effects: { potential: [2, 4], composure: [-2, 0], morale: [2, 4] } },
+  { id: 'gym_rat', title: 'Gym Rat', icon: '🏚️',
+    text: 'You found an old gym with a broken hoop and practiced there every day after school. The janitor became your biggest fan.',
+    effects: { work_ethic: [2, 3], stamina: [0, 2] } },
+  { id: 'rivalry', title: 'First Rival', icon: '⚔️',
+    text: 'A kid from the next neighborhood challenged you to one-on-one every weekend. You pushed each other to get better.',
+    effects: { clutch_factor: [1, 3], composure: [0, 2] } },
+];
+
+const TEEN_EVENTS = [
+  { id: 'breakout_game', title: 'Breakout Performance', icon: '💥',
+    text: 'In a national tournament, you scored 35 points in front of scouts. Your name started circulating.',
+    effects: { morale: [2, 5] }, clout_bonus: [3, 6] },
+  { id: 'friend_nba', title: 'A Friend Turns Pro', icon: '🤝',
+    text: 'A teammate from your youth days just signed a professional contract. It lit a fire in you.',
+    effects: { work_ethic: [1, 3], morale: [1, 3] } },
+  { id: 'scout_notice', title: 'Scouts Are Watching', icon: '🔭',
+    text: 'NBA scouts started showing up at your games. The pressure was real.',
+    choices: [
+      { text: 'Use the pressure as fuel.', effects: { composure: [1, 2], work_ethic: [1, 2] } },
+      { text: 'It got in my head a little.', effects: { composure: [-2, 0], potential: [0, 2] } },
+    ] },
+  { id: 'setback', title: 'A Setback', icon: '😤',
+    text: 'You were cut from a select team. It was humiliating — but it made you work harder.',
+    effects: { work_ethic: [2, 4], composure: [1, 2], morale: [-4, -2] } },
+  { id: 'mentor_appears', title: 'An Unexpected Mentor', icon: '🧙',
+    text: 'A retired pro started training at your gym. He took an interest in your game.',
+    effects: { bbiq: [1, 3], leadership: [1, 2] },
+    relationship: { type: 'mentor', name: 'Coach Davis', bond: 45 } },
+  { id: 'social_media', title: 'Social Media Buzz', icon: '📱',
+    text: 'A highlight clip went viral. Thousands of followers overnight. Brands started calling.',
+    effects: { morale: [1, 3] }, clout_bonus: [4, 8] },
+];
+
+const PREDRAFT_EVENTS = [
+  { id: 'march_madness', title: 'March Madness Heroics', icon: '🏀',
+    text: 'You hit a buzzer-beater in the tournament. The clip went viral worldwide.',
+    effects: { morale: [2, 4] }, clout_bonus: [5, 10], fan_base_bonus: [5, 10], exposure_bonus: 2 },
+  { id: 'injury_scare', title: 'Pre-Draft Injury Scare', icon: '🏥',
+    text: 'A minor injury in your last game scared off some teams. Your draft stock dipped.',
+    effects: { morale: [-5, -2] }, exposure_bonus: -2 },
+  { id: 'agent_offer', title: 'Agents Come Calling', icon: '📞',
+    text: 'Multiple agents are trying to sign you. One promises top-5 pick guarantees.',
+    choices: [
+      { text: 'Sign with the flashy agent.', effects: { morale: [1, 2] }, clout_bonus: [1, 3] },
+      { text: 'Go with the reliable one.', effects: { composure: [1, 2] } },
+    ] },
+  { id: 'viral_workout', title: 'Viral Workout Video', icon: '📹',
+    text: 'A video of your training session got millions of views. Hype is building.',
+    effects: { morale: [1, 3] }, clout_bonus: [3, 6], fan_base_bonus: [3, 6], exposure_bonus: 1 },
+  { id: 'family_pressure', title: 'Family Expectations', icon: '👨‍👩‍👧',
+    text: 'Your whole town is watching. The pressure of representing everyone is weighing on you.',
+    choices: [
+      { text: 'Carry the weight — I play for them.', effects: { leadership: [1, 3], morale: [-2, 0] } },
+      { text: 'Block it out — focus on myself.', effects: { composure: [1, 2] } },
+    ] },
+  { id: 'private_workout', title: 'Secret Workout', icon: '🔒',
+    text: 'A mysterious trainer offered a week of elite-level drills nobody else gets to do.',
+    effects: { catch_shoot_3pt: [1, 2], finishing: [1, 2] } },
+];
+
+// Resolve a random event — roll values from [min, max] ranges.
+function resolveEvent(event) {
+  const resolved = { ...event, resolved_effects: {} };
+  const fx = event.effects || {};
+  for (const [k, range] of Object.entries(fx)) {
+    if (Array.isArray(range)) resolved.resolved_effects[k] = randInt(range[0], range[1]);
+    else resolved.resolved_effects[k] = range;
+  }
+  // Also resolve optional bonus fields
+  for (const key of ['clout_bonus', 'fan_base_bonus']) {
+    if (event[key]) resolved[key] = randInt(event[key][0], event[key][1]);
+  }
+  return resolved;
+}
+
+// FIBA Youth Tournament data.
+const FIBA_YOUTH = {
+  u17: { label: 'FIBA U17 World Cup', icon: '🌍', age_req: 17,
+    teams: ['USA','Spain','France','Serbia','Lithuania','Argentina','Australia','China','Turkey','Canada','Egypt','Mali','Japan','Philippines','Germany','Italy'],
+    desc: 'The biggest stage for youth basketball. NBA scouts are watching every game.' },
+  u19: { label: 'FIBA U19 World Cup', icon: '🌍', age_req: 19,
+    teams: ['USA','Spain','France','Serbia','Lithuania','Argentina','Australia','China','Turkey','Canada','Nigeria','Japan','Germany','Italy','Greece','Brazil'],
+    desc: 'The final showcase before the draft. A breakout here can change everything.' },
+};
+const FIBA_TEAM_STRENGTH = {
+  USA: 92, Spain: 82, France: 78, Serbia: 76, Lithuania: 74, Argentina: 70, Australia: 72,
+  China: 60, Turkey: 68, Canada: 75, Nigeria: 58, Japan: 56, Germany: 76, Italy: 72,
+  Greece: 70, Brazil: 62, Egypt: 50, Mali: 48, Philippines: 52, Slovenia: 73,
+};
+
+function simulateFibaYouth(playerAttrs, tournament, nationality) {
+  const overall = calculateOverallRating(playerAttrs);
+  const teamStrength = FIBA_TEAM_STRENGTH[nationality] || 60;
+  const perfRoll = overall * randRange(0.7, 1.4);
+  const teamRoll = teamStrength * randRange(0.6, 1.3);
+  let medal = null;
+  if (teamRoll > 85 && perfRoll > 60) medal = 'gold';
+  else if (teamRoll > 75 && perfRoll > 55) medal = 'silver';
+  else if (teamRoll > 70 && perfRoll > 50) medal = 'bronze';
+  const ppg = Math.round(clamp(overall * 0.35 + gauss(0, 4), 4, 30));
+  const rpg = Math.round(clamp(overall * 0.12 + gauss(0, 2), 1, 12));
+  const apg = Math.round(clamp(overall * 0.10 + gauss(0, 2), 0, 10));
+  const teamFinish = medal || 'quarterfinals';
+  // Narrative text
+  let narrative;
+  if (medal === 'gold' && ppg >= 20) narrative = `You led ${nationality} to ${tournament.label} gold, putting up ${ppg} PPG. NBA scouts put you on their first-round board.`;
+  else if (medal === 'gold') narrative = `${nationality} won gold at ${tournament.label}! You were a key contributor on a championship team.`;
+  else if (medal) narrative = `A ${medal} medal at ${tournament.label}. Your ${ppg} PPG turned heads even if the team fell short of gold.`;
+  else if (ppg >= 18) narrative = `${nationality} was eliminated early, but your ${ppg} PPG performance was impossible to ignore.`;
+  else narrative = `The ${tournament.label} journey ended in the quarterfinals. A learning experience.`;
+  return { medal, ppg, rpg, apg, teamFinish, narrative, tournament: tournament.label, tournament_icon: tournament.icon };
+}
+
+// NBA Draft Combine simulation.
+function simulateCombine(attrs) {
+  const a = (k) => attrs[k] ?? 50; // default to 50 for missing attrs
+  const agility = clamp(a('lateral_quickness') * 0.4 + a('speed') * 0.4 + a('core_stability') * 0.2 + gauss(0, 4), 20, 99);
+  const sprint = clamp(a('speed') * 0.6 + a('first_step') * 0.4 + gauss(0, 4), 20, 99);
+  const vert = clamp(a('vertical_jump') * 0.8 + a('strength') * 0.2 + gauss(0, 4), 20, 99);
+  const bench = clamp(a('strength') * 0.7 + a('core_stability') * 0.3 + gauss(0, 3), 20, 99);
+  const spot_up = clamp(a('catch_shoot_3pt') * 0.7 + a('mid_range') * 0.3 + gauss(0, 5), 20, 99);
+  const off_dribble = clamp(a('pull_up_3pt') * 0.5 + a('mid_range') * 0.5 + gauss(0, 5), 20, 99);
+  // For overall, build a full attrs object with defaults
+  const fullAttrs = {};
+  for (const cat of Object.values(ATTRIBUTE_CATEGORIES)) {
+    for (const attr of cat.attrs) fullAttrs[attr] = a(attr);
+  }
+  const scrimmage = clamp(calculateOverallRating(fullAttrs) + gauss(0, 8), 25, 95);
+  const measurements = { agility: Math.round(agility), sprint: Math.round(sprint), vert: Math.round(vert), bench: Math.round(bench) };
+  const shooting = { spot_up: Math.round(spot_up), off_dribble: Math.round(off_dribble) };
+  const combine_score = round1((agility + sprint + vert + spot_up + scrimmage) / 5);
+  const combine_swing = Math.round((combine_score - 60) / 8);
+  return { measurements, shooting, scrimmage: Math.round(scrimmage), combine_score, combine_swing };
+}
+
+// Check if player qualifies for FIBA youth tournament.
+function qualifiesForFiba(nationality, teenPath, playerAttrs) {
+  if (teenPath === 'national_junior') return true;
+  if (nationality === 'USA') return false; // USA doesn't trigger via overall
+  const overall = calculateOverallRating(playerAttrs);
+  return overall > 55;
+}
+
+// Path synergy check — returns bonus effects if the 3-layer combo matches any synergy.
+function checkPathSynergy(layer1, layer2, layer3) {
+  for (const syn of PATH_SYNERGIES) {
+    const m = syn.match;
+    const l1ok = !m[0] || m[0].includes(layer1);
+    const l2ok = !m[1] || m[1].includes(layer2);
+    const l3ok = !m[2] || m[2].includes(layer3);
+    if (l1ok && l2ok && l3ok) return syn;
+  }
+  return null;
+}
+
+// ------------------------------------------------------------
 // Attributes that can be developed mid-season (training focus + auto development).
 const DEVELOPABLE_ATTRS = [
   'mid_range', 'catch_shoot_3pt', 'pull_up_3pt', 'finishing', 'first_step', 'free_throw', 'drawing_fouls', 'off_ball',
@@ -327,7 +692,7 @@ function rollGrowthArchetype(background, workEthic) {
 // ------------------------------------------------------------
 // Player creation (point-buy)
 // ------------------------------------------------------------
-function calculatePointPool(position, height, weight, luckBonus = null) {
+function calculatePointPool(position, height, weight, luckBonus = null, pathBonus = 0) {
   const profile = POSITION_PROFILES[position];
   const base = profile.base_points;
   const hMid = (profile.height_range[0] + profile.height_range[1]) / 2;
@@ -337,14 +702,14 @@ function calculatePointPool(position, height, weight, luckBonus = null) {
   const wDev = (weight - wMid) / (profile.weight_range[1] - profile.weight_range[0]);
   const weightBonus = Math.round(wDev * 8);
   const luck = luckBonus != null ? luckBonus : randInt(-12, 12);
-  const totalPoints = base + heightBonus + weightBonus + luck;
+  const totalPoints = base + heightBonus + weightBonus + luck + pathBonus;
 
   const aptitudes = { ...profile.aptitudes };
   if (hDev > 0.3) { aptitudes.defense += 3; aptitudes.athleticism += 2; aptitudes.inside -= 2; aptitudes.outside -= 2; }
   else if (hDev < -0.3) { aptitudes.outside += 3; aptitudes.inside += 2; aptitudes.playmaking += 2; aptitudes.defense -= 2; }
 
   return { total_points: totalPoints, base, height_bonus: heightBonus, weight_bonus: weightBonus,
-           luck_bonus: luck, aptitudes, height_deviation: round2(hDev), weight_deviation: round2(wDev) };
+           luck_bonus: luck, path_bonus: pathBonus, aptitudes, height_deviation: round2(hDev), weight_deviation: round2(wDev) };
 }
 
 function generateStaticPhysicals(position, height, weight) {
@@ -358,9 +723,10 @@ function generateStaticPhysicals(position, height, weight) {
   return { wingspan, standing_reach: standingReach, hand_size: handSize, frame_build: frame, body_fat_pct: bodyFat };
 }
 
-function createPlayerWithPoints(name, position, age, height, weight, allocations, luckBonus = null, background = 'small_town', nationality = 'USA') {
+function createPlayerWithPoints(name, position, age, height, weight, allocations, luckBonus = null, background = 'small_town', nationality = 'USA', youthEffects = null, exposure = 0, pathLabel = '') {
+  const pathBonus = exposure >= 3 ? 8 : exposure >= 1 ? 4 : 0;
   const pid = crypto.randomBytes(4).toString('hex');
-  const poolInfo = calculatePointPool(position, height, weight, luckBonus);
+  const poolInfo = calculatePointPool(position, height, weight, luckBonus, pathBonus);
   const attrs = {};
   for (const [cat, catInfo] of Object.entries(ATTRIBUTE_CATEGORIES)) {
     const catPoints = allocations[cat] ?? poolInfo.aptitudes[cat] ?? 30;
@@ -385,6 +751,16 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
     else if (k === 'fan_base') fanBase = clamp(fanBase + v, 0, 100);
     else if (k === 'morale') morale = clamp(morale + v, 10, 100);
     else attrs[k] = clamp((attrs[k] ?? 50) + v, 18, 94);
+  }
+
+  // Journey youth effects: layered on top of background.
+  if (youthEffects) {
+    for (const [k, v] of Object.entries(youthEffects)) {
+      if (k === 'potential') potential = clamp(potential + v, 18, 99);
+      else if (k === 'fan_base') fanBase = clamp(fanBase + v, 0, 100);
+      else if (k === 'morale') morale = clamp(morale + v, 10, 100);
+      else attrs[k] = clamp((attrs[k] ?? 50) + v, 18, 94);
+    }
   }
 
   // Rebounding inherits the point-bought box-out skill at creation, then grows
@@ -439,7 +815,7 @@ function createPlayerWithPoints(name, position, age, height, weight, allocations
     .run(pid, teamId, sal * 3, sal);
   ensureLeaguePlayers(pid);
   syncTeammates(pid);
-  return pid;
+  return { pid, potential, fanBase, morale, attrs };
 }
 
 // ------------------------------------------------------------
@@ -584,20 +960,35 @@ function weightedPickIndex(weights) {
   return weights.length - 1;
 }
 
-function simulateDraft(playerId) {
+function simulateDraft(playerId, exposureBonus = 0, combineSwingBonus = 0, workoutTeams = []) {
   const player = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!player) throw httpError(404, 'Player not found');
   const overall = calculateOverallRating(player);
   const draftClass = generateDraftClass();
   const draftOrder = buildDraftOrder(playerId);
-  const combineSwing = randInt(-8, 8);
+  const combineSwing = randInt(-8, 8) + (exposureBonus || 0) + (combineSwingBonus || 0);
   const draftStock = clamp(overall + combineSwing, 25, 95);
+
+  // Workout bonus: if the player worked out for a team, that team is slightly
+  // more likely to pick them (implemented as a small overall bump when that
+  // team's slot comes up in the draft order).
+  const workoutSet = new Set((workoutTeams || []).map(Number));
+
   const allProspects = draftClass.map(p => ({ ...p })).concat([
     { id: 0, name: player.name, position: player.position, height: player.height, weight: player.weight, age: player.age, overall: draftStock, potential: player.potential ?? 50, is_player: true },
   ]);
   allProspects.sort((a, b) => b.overall - a.overall);
-  const draftPosition = allProspects.findIndex(p => p.is_player) + 1;
+  let draftPosition = allProspects.findIndex(p => p.is_player) + 1;
   const season = getLeagueState(playerId).current_season;
+
+  // If a workout team is picking near the player's projected slot, nudge the
+  // player one slot earlier (the team "reaches" for someone they worked out).
+  if (workoutSet.size > 0 && draftPosition > 1) {
+    const nearTeamId = draftOrder[draftPosition - 2]; // team picking one slot earlier
+    if (nearTeamId && workoutSet.has(nearTeamId) && Math.random() < 0.45) {
+      draftPosition -= 1;
+    }
+  }
 
   // Ranked worse than the 60th pick → undrafted. Sign a two-way deal instead.
   if (draftPosition > 60) {
@@ -4305,21 +4696,104 @@ function wrap(fn) {
 
 // Player
 app.post('/api/player/create', wrap((req) => {
-  const { name, position, age = 19, height, weight, allocations, luck_bonus, background, nationality = 'USA' } = req.body || {};
+  const { name, position, age = 19, height, weight, allocations, luck_bonus, background, nationality = 'USA',
+          youthEffects, exposure = 0, pathLabel = '', journeyEntries = [], combineSwing = 0, workoutTeams = [] } = req.body || {};
   if (!POSITION_PROFILES[position]) throw httpError(400, 'Invalid position');
   if (!(age >= 19 && age <= 23)) throw httpError(400, `Age must be 19-23, got ${age}`);
   const profile = POSITION_PROFILES[position];
   if (!(height >= profile.height_range[0] - 0.03 && height <= profile.height_range[1] + 0.03)) throw httpError(400, `Height ${height}m outside range for ${position}`);
   if (!(weight >= profile.weight_range[0] - 5 && weight <= profile.weight_range[1] + 5)) throw httpError(400, `Weight ${weight}kg outside range for ${position}`);
-  const poolInfo = calculatePointPool(position, height, weight, luck_bonus ?? null);
+  const pathBonus = exposure >= 3 ? 8 : exposure >= 1 ? 4 : 0;
+  const poolInfo = calculatePointPool(position, height, weight, luck_bonus ?? null, pathBonus);
   const totalAllocated = Object.values(allocations || {}).reduce((a, b) => a + b, 0);
   if (totalAllocated !== poolInfo.total_points) throw httpError(400, `Allocation total ${totalAllocated} does not match point pool ${poolInfo.total_points}`);
-  const pid = createPlayerWithPoints(name, position, age, height, weight, allocations, luck_bonus ?? null, background, nationality);
+  const result = createPlayerWithPoints(name, position, age, height, weight, allocations, luck_bonus ?? null, background, nationality, youthEffects, exposure, pathLabel);
+  const pid = result.pid;
+  const season = 0;
+  // Write journey origin entries to career_progress.
+  for (const entry of journeyEntries) {
+    db.prepare('INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)')
+      .run(pid, season, 'origin', entry);
+  }
   const player = db.prepare('SELECT * FROM players WHERE id=?').get(pid);
-  return { player_id: pid, player: sanitizePlayer(player), pool_info: poolInfo };
+  return { player_id: pid, player: sanitizePlayer(player), pool_info: poolInfo, exposure, combineSwing, workoutTeams };
 }));
 
 app.get('/api/player/backgrounds', wrap(() => ({ backgrounds: BACKGROUNDS })));
+
+// Journey paths — returns 3-layer path options for the player's nationality.
+app.get('/api/journey/paths', wrap((req) => {
+  const nationality = req.query.nationality || 'USA';
+  const group = getRouteGroup(nationality);
+  const paths = JOURNEY_PATHS[group] || JOURNEY_PATHS.Global;
+  return { route_group: group, paths };
+}));
+
+// Journey event — roll a random event for a given layer.
+app.post('/api/journey/event', wrap((req) => {
+  const { layer } = req.body || {};
+  let pool;
+  if (layer === 'childhood') pool = CHILDHOOD_EVENTS;
+  else if (layer === 'teen') pool = TEEN_EVENTS;
+  else if (layer === 'predraft') pool = PREDRAFT_EVENTS;
+  else throw httpError(400, 'Invalid layer');
+  const event = choice(pool);
+  return resolveEvent(event);
+}));
+
+// FIBA youth tournament simulation.
+app.post('/api/journey/fiba', wrap((req) => {
+  const { attrs, nationality, tournament = 'u19' } = req.body || {};
+  const t = FIBA_YOUTH[tournament] || FIBA_YOUTH.u19;
+  return simulateFibaYouth(attrs || {}, t, nationality || 'USA');
+}));
+
+// Combine simulation.
+app.post('/api/combine/simulate', wrap((req) => {
+  const { attrs } = req.body || {};
+  return simulateCombine(attrs || {});
+}));
+
+// Team workout selection — returns 6 random lottery teams.
+app.get('/api/combine/workouts', wrap(() => {
+  // Lottery teams = bottom 14 from prior season. For new players, just pick 6 random teams.
+  const shuffled = shuffle([...ALL_TEAM_IDS]);
+  const selected = shuffled.slice(0, 6);
+  return {
+    teams: selected.map(id => {
+      const t = TEAMS[id];
+      const need = choice(['PG', 'SG', 'SF', 'PF', 'C']);
+      return { id, name: t.name, abbr: t.abbr, ovr: t.ovr, need, conf: t.conf };
+    })
+  };
+}));
+
+// Single team workout result.
+app.post('/api/combine/workout-result', wrap((req) => {
+  const { teamId, attrs } = req.body || {};
+  const team = TEAMS[teamId];
+  if (!team) throw httpError(400, 'Invalid team');
+  const overall = calculateOverallRating(attrs || {});
+  const roll = Math.random();
+  let result, narrative;
+  if (roll < 0.3) {
+    result = 'impressed';
+    narrative = `You dominated the workout in ${team.name}'s facility. The coaching staff was buzzing.`;
+  } else if (roll < 0.75) {
+    result = 'solid';
+    narrative = `A solid showing at ${team.name}. Nothing flashy, but professional and composed.`;
+  } else {
+    result = 'disappointing';
+    narrative = `Things didn't click at ${team.name}. A few turnovers, some missed shots. Not your best.`;
+  }
+  return { team: team.name, team_abbr: team.abbr, result, narrative, overall };
+}));
+
+// Path synergy check.
+app.post('/api/journey/synergy', wrap((req) => {
+  const { layer1, layer2, layer3 } = req.body || {};
+  return checkPathSynergy(layer1, layer2, layer3) || { id: null };
+}));
 
 app.get('/api/player/:id', wrap((req) => {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
@@ -4523,11 +4997,14 @@ app.put('/api/player/:id/focus', wrap((req) => {
 
 // Draft
 app.get('/api/draft/point-pool', wrap((req) => {
-  const { position, height, weight } = req.query;
+  const { position, height, weight, path_bonus } = req.query;
   if (!POSITION_PROFILES[position]) throw httpError(400, 'Invalid position');
-  return calculatePointPool(position, parseFloat(height), parseFloat(weight));
+  return calculatePointPool(position, parseFloat(height), parseFloat(weight), null, parseInt(path_bonus) || 0);
 }));
-app.post('/api/draft/simulate/:id', wrap((req) => simulateDraft(req.params.id)));
+app.post('/api/draft/simulate/:id', wrap((req) => {
+  const { exposure = 0, combineSwing = 0, workoutTeams = [] } = req.body || {};
+  return simulateDraft(req.params.id, exposure, combineSwing, workoutTeams);
+}));
 
 // Draft scouting preview: generate a draft class and show where the player
 // projects, so they can see the competition before entering the draft.
@@ -4961,6 +5438,9 @@ if (require.main === module) {
 module.exports = {
   db, TEAMS, ALL_TEAM_IDS, POSITION_PROFILES, ATTRIBUTE_CATEGORIES, POSITION_ROLE, POSITION_DEFENSE,
   BACKGROUNDS, DEVELOPABLE_ATTRS, CAREER_EVENTS,
+  JOURNEY_PATHS, ROUTE_GROUPS, getRouteGroup, PATH_SYNERGIES, checkPathSynergy,
+  CHILDHOOD_EVENTS, TEEN_EVENTS, PREDRAFT_EVENTS, resolveEvent,
+  FIBA_YOUTH, FIBA_TEAM_STRENGTH, simulateFibaYouth, simulateCombine, qualifiesForFiba,
   createPlayerWithPoints, calculatePointPool, calculateOverallRating, simulateDraft,
   simulateGame, simulatePlayoffGame, generateSeasonSchedule, applyTraining, finalizeSeason, applyAging,
   getLeagueState, advanceLeaguePhase, advanceLeague, maybeDevelop, maybeCareerEvent,
