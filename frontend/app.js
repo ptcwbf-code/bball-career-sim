@@ -6,7 +6,11 @@ const S = {
   playerId: localStorage.getItem('bball_pid') || null,
   player: null, season: null, teams: null, programs: null,
   tab: 'dashboard', draftStage: null, draftData: null, mediaPending: false,
-  create: { name:'', position:'PG', age:19, height:null, weight:null, allocs:{}, background:'small_town', _backgrounds:null },
+  create: { name:'', position:'PG', age:19, height:null, weight:null, allocs:{}, background:'small_town', _backgrounds:null, _step:1,
+    nationality:'USA', journey:{ layer1:null, layer2:null, layer3:null }, _journeyLayer:1, _journeyPaths:null, _journeyEvents:[],
+    _fibaResult:null, youthEffects:{}, exposure:0, pathLabel:'', _synergy:null,
+    combineResult:null, workoutTeams:[], workoutResults:[], combineSwing:0, _pool:null
+  },
 };
 
 // ============================================================
@@ -525,15 +529,25 @@ async function renderCreateStep2_Journey(m) {
       try {
         const data = await api(`/journey/paths?nationality=${S.create.nationality || 'USA'}`);
         S.create._journeyPaths = data.paths;
-      } catch(e) { toast('Failed to load journey paths','error'); return; }
+      } catch(e) { toast('Failed to load journey paths — make sure the server is running.','error'); return; }
     }
     paths = S.create._journeyPaths;
+    if (!paths) {
+      m.innerHTML = `<div class="card p-6 text-center">
+        <p class="text-bad font-semibold mb-2">⚠️ Failed to load journey paths</p>
+        <p class="text-sm text-muted mb-4">The server may be starting up. Try again in a moment.</p>
+        <button class="btn-primary" onclick="S.create._step=2;renderCreate($('#main'))">Retry</button>
+        <button class="btn-secondary ml-2" onclick="S.create._step=1;renderCreate($('#main'))">← Back</button>
+      </div>`;
+      return;
+    }
     renderJourneyPage();
   }
 
   // ── Main page render ───────────────────────────────────────────────────
   function renderJourneyPage() {
     if (S.create._step !== 2) return; // guard: don't render if user navigated away
+    if (!paths) return; // guard: paths not loaded yet
     const curLayer = Math.min(S.create._journeyLayer || 1, 3);
     const journeyDone = S.create.journey.layer3 !== null;
     const layerKey = layerKeys[curLayer - 1];

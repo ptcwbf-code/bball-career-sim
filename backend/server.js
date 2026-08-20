@@ -4683,14 +4683,15 @@ app.use(express.json());
 
 function wrap(fn) {
   return (req, res) => {
-    try {
-      const result = fn(req, res);
-      if (result !== undefined && !res.headersSent) res.json(result);
-    } catch (e) {
-      if (e instanceof HttpError) return res.status(e.status).json({ detail: e.message });
-      console.error(e);
-      res.status(500).json({ detail: 'Internal server error' });
-    }
+    Promise.resolve()
+      .then(() => fn(req, res))
+      .then((result) => {
+        if (result !== undefined && !res.headersSent) res.json(result);
+      })
+      .catch((e) => {
+        if (e instanceof HttpError) { if (!res.headersSent) res.status(e.status).json({ detail: e.message }); }
+        else { console.error(e); if (!res.headersSent) res.status(500).json({ detail: 'Internal server error' }); }
+      });
   };
 }
 
