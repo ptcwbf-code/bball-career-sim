@@ -3506,9 +3506,28 @@ function handleNotableMedia(playerId, choiceIndex) {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p?.media_pending) throw httpError(400, 'No pending media interview.');
   const notable = JSON.parse(p.media_pending);
-  const scene = NOTABLE_MEDIA[notable.type];
-  if (!scene || choiceIndex < 0 || choiceIndex >= scene.choices.length) throw httpError(400, 'Invalid choice');
-  const choice = scene.choices[choiceIndex];
+  const lang = getLeagueState(playerId).lang || 'en';
+
+  // Life-triggered media: question is stored in notable.question, standard
+  // response tones are used (same choices as regular media scenarios).
+  const LIFE_MEDIA_CHOICES = [
+    { text: { en: '"It\'s a private matter. I\'m focused on basketball."', zh: '"这是私事，我只专注篮球。"' }, tone: 'neutral', fan_base: [-1, 2], clout: [0, 2], mvp: [0, 1] },
+    { text: { en: '"Family and love come first. Always."', zh: '"家庭和爱永远是第一位。"' }, tone: 'sincere', fan_base: [1, 4], clout: [-1, 2], mvp: [0, 2] },
+    { text: { en: '"I appreciate the concern, but I\'m doing great."', zh: '"谢谢关心，我很好。"' }, tone: 'humble', fan_base: [0, 3], clout: [0, 2], mvp: [0, 1] },
+  ];
+
+  let questionText, choices;
+  if (notable.type === 'life_media' && notable.question) {
+    questionText = pick(notable.question, lang);
+    choices = LIFE_MEDIA_CHOICES;
+  } else {
+    const scene = NOTABLE_MEDIA[notable.type];
+    if (!scene) throw httpError(400, 'Invalid media type');
+    questionText = scene.question(notable);
+    choices = scene.choices;
+  }
+  if (choiceIndex < 0 || choiceIndex >= choices.length) throw httpError(400, 'Invalid choice');
+  const choice = choices[choiceIndex];
   const effects = {};
   for (const key of ['fan_base', 'clout']) {
     if (key in choice) effects[key] = clamp((p[key] ?? 50) + randInt(choice[key][0], choice[key][1]), 0, 100);
@@ -3516,7 +3535,6 @@ function handleNotableMedia(playerId, choiceIndex) {
   if ('chemistry' in choice) nudgeBonds(playerId, randInt(choice.chemistry[0], choice.chemistry[1]));
   if ('mvp' in choice) effects.mvp_votes = clamp((p.mvp_votes ?? 0) + randInt(choice.mvp[0], choice.mvp[1]), 0, 100);
   addValues(playerId, MEDIA_TONE_VALUES[choice.tone] || {});
-  const lang = getLeagueState(playerId).lang || 'en';
   const narrative = pick(NARRATIVES[choice.tone], lang) || 'Your words had a subtle impact on those around you.';
   const parts = []; const vals = [];
   for (const [key, val] of Object.entries(effects)) { parts.push(`${key}=?`); vals.push(val); }
@@ -3525,10 +3543,9 @@ function handleNotableMedia(playerId, choiceIndex) {
   parts.push("updated_at=datetime('now')");
   vals.push(playerId);
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
-  const question = scene.question(notable);
   db.prepare("INSERT INTO media_events (player_id,season_number,scenario_id,event_type,description,choice_made,narrative_result) VALUES (?,?,?,'interview',?,?,?)")
-    .run(playerId, getLeagueState(playerId).current_season, 'notable_' + notable.type, question, choice.text, pick(NARRATIVES[choice.tone], 'en'));
-  return { question, choice: choice.text, narrative, tone: choice.tone };
+    .run(playerId, getLeagueState(playerId).current_season, 'notable_' + notable.type, questionText, pick(choice.text, lang), pick(NARRATIVES[choice.tone], 'en'));
+  return { question: questionText, choice: pick(choice.text, lang), narrative, tone: choice.tone };
 }
 
 function handleMediaEvent(playerId, scenarioId, choiceIndex) {
@@ -4018,6 +4035,20 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
 
   db.prepare('INSERT INTO life_events (player_id,season_number,event_id,relationship_id,description,choice_made) VALUES (?,?,?,?,?,?)')
     .run(playerId, season, ev.id, rel ? rel.id : null, pick(ev.question, 'en'), pick(ch.text, 'en'));
+
+  // Certain significant life events draw media attention — set a pending interview.
+  const LIFE_MEDIA_TRIGGERS = {
+    marriage:   { en: "You just got married! The media wants your thoughts on balancing love and basketball.", zh: "你刚结婚！媒体想听听你怎么平衡爱情和篮球。" },
+    kids:       { en: "You're going to be a parent! Reporters are asking how fatherhood will change your game.", zh: "你要当爸爸了！记者们在问父亲身份会怎么改变你的比赛。" },
+    parent_illness: { en: "The news about your mom got out. Reporters are asking how you're holding up.", zh: "你妈妈住院的消息传出去了。记者们在问你怎么样。" },
+    sibling_trouble: { en: "The nepotism story made the rounds. Media wants your side.", zh: "裙带关系的传闻传开了，媒体想要你这边的说法。" },
+    friend_trouble:  { en: "Word got around that you cut off an old friend. Reporters want the story.", zh: "你跟老友断交的消息传开了，记者们想要这个故事。" },
+  };
+  const mediaQ = LIFE_MEDIA_TRIGGERS[ev.id];
+  if (mediaQ && !p.media_pending) {
+    db.prepare("UPDATE players SET media_pending=? WHERE id=?")
+      .run(JSON.stringify({ type: 'life_media', question: mediaQ }), playerId);
+  }
 
   const lang = getLeagueState(playerId).lang || 'en';
   return {
@@ -4653,9 +4684,19 @@ app.post('/api/media/respond/:id', wrap((req) => handleMediaEvent(req.params.id,
 app.get('/api/media/notable/:id', wrap((req) => {
   const p = db.prepare('SELECT media_pending FROM players WHERE id=?').get(req.params.id);
   const notable = p?.media_pending ? JSON.parse(p.media_pending) : null;
-  if (!notable || !NOTABLE_MEDIA[notable.type]) return { notable: null };
+  if (!notable) return { notable: null };
+  const lang = getLeagueState(req.params.id).lang || 'en';
+  const LIFE_MEDIA_CHOICES = [
+    { text: { en: '"It\'s a private matter. I\'m focused on basketball."', zh: '"这是私事，我只专注篮球。"' }, tone: 'neutral' },
+    { text: { en: '"Family and love come first. Always."', zh: '"家庭和爱永远是第一位。"' }, tone: 'sincere' },
+    { text: { en: '"I appreciate the concern, but I\'m doing great."', zh: '"谢谢关心，我很好。"' }, tone: 'humble' },
+  ];
+  if (notable.type === 'life_media' && notable.question) {
+    return { notable, question: pick(notable.question, lang), choices: LIFE_MEDIA_CHOICES.map(c => ({ text: pick(c.text, lang), tone: c.tone })) };
+  }
   const scene = NOTABLE_MEDIA[notable.type];
-  return { notable, question: scene.question(notable), choices: scene.choices.map(c => ({ text: c.text, tone: c.tone })) };
+  if (!scene) return { notable: null };
+  return { notable, question: scene.question(notable), choices: scene.choices.map(c => ({ text: pick(c.text, lang), tone: c.tone })) };
 }));
 app.post('/api/media/respond-notable/:id', wrap((req) => handleNotableMedia(req.params.id, Number(req.query.choice_index))));
 app.get('/api/media/history/:id', wrap((req) => ({ events: db.prepare('SELECT * FROM media_events WHERE player_id=? ORDER BY created_at DESC LIMIT ?').all(req.params.id, Math.min(Number(req.query.limit) || 20, 100)) })));
