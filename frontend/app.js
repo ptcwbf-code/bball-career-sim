@@ -533,6 +533,7 @@ async function renderCreateStep2_Journey(m) {
 
   // ── Main page render ───────────────────────────────────────────────────
   function renderJourneyPage() {
+    if (S.create._step !== 2) return; // guard: don't render if user navigated away
     const curLayer = Math.min(S.create._journeyLayer || 1, 3);
     const journeyDone = S.create.journey.layer3 !== null;
     const layerKey = layerKeys[curLayer - 1];
@@ -624,6 +625,7 @@ async function renderCreateStep2_Journey(m) {
 
     // ── Render content ──
     const content = $('#j-content');
+    wirePathCards(); // ensure delegation is always attached
 
     if (journeyDone) {
       // All layers complete — show final review
@@ -678,7 +680,7 @@ async function renderCreateStep2_Journey(m) {
     renderSummary(fxEntries, totalExp);
 
     // ── Navigation wiring ──
-    wireNavigation(journeyDone);
+    // Navigation handled by event delegation
   }
 
   // ── Path selection cards ────────────────────────────────────────────────
@@ -705,24 +707,92 @@ async function renderCreateStep2_Journey(m) {
       </div>`;
   }
 
-  // ── Wire path card clicks ──────────────────────────────────────────────
+  // ── Wire path card clicks (event delegation on m — survives innerHTML re-renders) ──
   function wirePathCards() {
-    const grid = m.querySelector('#path-cards-grid') || m;
-    grid.querySelectorAll('.journey-choice').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const pathId = btn.dataset.pathId;
-        const layerKey = btn.dataset.layer;
-        const layerIdx = layerKeys.indexOf(layerKey) + 1;
-        S.create.journey['layer' + layerIdx] = pathId;
-        const opt = (paths[layerKey]||[]).find(o => o.id === pathId);
-        if (opt) {
-          S.create.exposure += (opt.exposure || 0);
-          if (opt.morale_offset) S.create.youthEffects.morale = (S.create.youthEffects.morale || 0) + opt.morale_offset;
-          if (opt.potential_bonus) S.create.youthEffects.potential = (S.create.youthEffects.potential || 0) + opt.potential_bonus;
-        }
-        renderJourneyPage();
-      });
+    if (m._journeyWired) return;
+    m._journeyWired = true;
+    m.addEventListener('click', (e) => {
+      // Path card selection
+      const pathBtn = e.target.closest('.journey-choice');
+      if (pathBtn) { handlePathChoice(pathBtn); return; }
+      // Event continue button
+      if (e.target.closest('#ev-continue')) {
+        advanceLayer(S.create._journeyLayer);
+        return;
+      }
+      // Event choice button
+      const choiceBtn = e.target.closest('#ev-choices button[data-ci]');
+      if (choiceBtn) { handleEventChoice(choiceBtn); return; }
+      // FIBA play button
+      if (e.target.closest('#fiba-play')) {
+        handleFibaPlay();
+        return;
+      }
+      // Journey Continue button
+      if (e.target.closest('#c-next-journey')) {
+        const labels = ['layer1','layer2','layer3'].map(lid => pathLabelForId(S.create.journey[lid])).filter(Boolean);
+        S.create.pathLabel = labels.join(' → ');
+        S.create._step = 3;
+        S.create.allocs = {};
+        renderCreate($('#main'));
+        return;
+      }
+      // Journey Back button
+      if (e.target.closest('#c-back-journey')) {
+        S.create._step = 1;
+        renderCreate($('#main'));
+        return;
+      }
     });
+  }
+
+  async function handlePathChoice(btn) {
+    const pathId = btn.dataset.pathId;
+    const layerKey = btn.dataset.layer;
+    const layerIdx = layerKeys.indexOf(layerKey) + 1;
+    if (S.create.journey['layer' + layerIdx]) return; // already chosen
+    S.create.journey['layer' + layerIdx] = pathId;
+    const opt = (paths[layerKey]||[]).find(o => o.id === pathId);
+    if (opt) {
+      S.create.exposure += (opt.exposure || 0);
+      if (opt.morale_offset) S.create.youthEffects.morale = (S.create.youthEffects.morale || 0) + opt.morale_offset;
+      if (opt.potential_bonus) S.create.youthEffects.potential = (S.create.youthEffects.potential || 0) + opt.potential_bonus;
+    }
+    renderJourneyPage();
+  }
+
+  function handleEventChoice(btn) {
+    const ci = parseInt(btn.dataset.ci);
+    const evIdx = S.create._journeyLayer - 1;
+    const event = S.create._journeyEvents[evIdx];
+    if (!event || event._choiceIndex !== undefined) return;
+    const chosen = event.choices[ci];
+    event._choiceIndex = ci;
+    const resolved = {};
+    for (const [k, v] of Object.entries(chosen.effects || {})) {
+      const val = Array.isArray(v) ? randInt(v[0], v[1]) : v;
+      resolved[k] = val;
+      S.create.youthEffects[k] = (S.create.youthEffects[k] || 0) + val;
+    }
+    if (event.exposure_bonus) S.create.exposure += event.exposure_bonus;
+    event.resolved_effects = resolved;
+    S.create._journeyEvents[evIdx] = event;
+    renderJourneyPage();
+  }
+
+  async function handleFibaPlay() {
+    const fibaEl = m.querySelector('#j-fiba');
+    if (!fibaEl) return;
+    fibaEl.innerHTML = '<div class="text-center py-4"><div class="spinner mx-auto mb-2"></div><p class="text-xs text-muted">Simulating tournament…</p></div>';
+    try {
+      const roughAttrs = {};
+      for (const [k,v] of Object.entries(S.create.youthEffects)) roughAttrs[k] = 50 + v;
+      const result = await api('/journey/fiba', { method:'POST', body: JSON.stringify({ attrs: roughAttrs, nationality: S.create.nationality || 'USA', tournament: 'u19' })});
+      S.create._fibaResult = result;
+      S.create.exposure += result.medal === 'gold' ? (result.ppg >= 20 ? 3 : 2) : result.medal ? 2 : (result.ppg >= 18 ? 1 : 0);
+      if (result.medal) S.create.youthEffects.morale = (S.create.youthEffects.morale||0) + (result.medal === 'gold' ? 5 : 3);
+      renderJourneyPage();
+    } catch(e) { fibaEl.innerHTML = '<p class="text-xs text-bad">Tournament simulation failed.</p>'; }
   }
 
   // ── Roll event for a layer ─────────────────────────────────────────────
@@ -730,6 +800,13 @@ async function renderCreateStep2_Journey(m) {
     try {
       const event = await api('/journey/event', { method:'POST', body: JSON.stringify({ layer: layerKey }) });
       S.create._journeyEvents[layerNum - 1] = event;
+      // Apply non-choice event effects immediately
+      if (!event.choices || event.choices.length === 0) {
+        for (const [k, v] of Object.entries(event.resolved_effects || {})) {
+          S.create.youthEffects[k] = (S.create.youthEffects[k] || 0) + v;
+        }
+        if (event.exposure_bonus) S.create.exposure += event.exposure_bonus;
+      }
     } catch(e) {
       toast('Event roll failed','error');
       S.create._journeyEvents[layerNum - 1] = { id:'noop', title:'A Quiet Day', icon:'☁️', text:'Nothing remarkable happened.', resolved_effects:{} };
@@ -769,15 +846,12 @@ async function renderCreateStep2_Journey(m) {
     // Show effects for non-choice or already-picked choice
     const fxEl = $('#ev-fx', container);
     if (!hasChoices) {
-      // Non-choice: show resolved effects
       let tags = Object.entries(event.resolved_effects||{}).map(([k,v]) => fxTag(v, k)).join('');
       if (event.clout_bonus) tags += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent">clout +${event.clout_bonus}</span>`;
       if (event.fan_base_bonus) tags += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-cyber/10 text-cyber">fan base +${event.fan_base_bonus}</span>`;
       if (event.exposure_bonus) tags += `<span class="text-[10px] px-1.5 py-0.5 rounded bg-cyber/10 text-cyber">exposure ${event.exposure_bonus>0?'+':''}${event.exposure_bonus}</span>`;
       fxEl.innerHTML = `<div class="flex flex-wrap gap-1.5">${tags}</div>`;
-      $('#ev-continue').onclick = () => advanceLayer(layerNum);
     } else if (choicePicked) {
-      // Choice already picked (back-navigation)
       const ch = event.choices[event._choiceIndex];
       fxEl.innerHTML = `<div class="flex flex-wrap gap-1.5 mt-1">
         <p class="text-[10px] text-accent font-semibold mr-2 self-center">You chose: "${esc(ch.text)}"</p>
@@ -786,41 +860,6 @@ async function renderCreateStep2_Journey(m) {
           return fxTag(val, k);
         }).join('')}
       </div>`;
-      $('#ev-continue').onclick = () => advanceLayer(layerNum);
-    }
-
-    // Wire choice buttons for unresolved choices
-    if (hasChoices && !choicePicked) {
-      $$('#ev-choices button', container).forEach(btn => {
-        btn.onclick = () => {
-          const ci = parseInt(btn.dataset.ci);
-          const chosen = event.choices[ci];
-          event._choiceIndex = ci;
-          // Resolve effects
-          const resolved = {};
-          for (const [k, v] of Object.entries(chosen.effects || {})) {
-            const val = Array.isArray(v) ? randInt(v[0], v[1]) : v;
-            resolved[k] = val;
-            S.create.youthEffects[k] = (S.create.youthEffects[k] || 0) + val;
-          }
-          if (event.exposure_bonus) S.create.exposure += event.exposure_bonus;
-          event.resolved_effects = resolved;
-          S.create._journeyEvents[layerNum - 1] = event;
-          // Show result
-          fxEl.innerHTML = `<div class="flex flex-wrap gap-1.5 mt-1">
-            <p class="text-[10px] text-accent font-semibold mr-2 self-center">You chose: "${esc(chosen.text)}"</p>
-            ${Object.entries(resolved).map(([k,v]) => fxTag(v, k)).join('')}
-          </div>`;
-          // Replace choices with continue button
-          const choicesEl = $('#ev-choices', container);
-          if (choicesEl) choicesEl.remove();
-          const card = container.querySelector('.event-card');
-          if (card && !$('#ev-continue', card)) {
-            card.insertAdjacentHTML('beforeend', '<button class="btn-primary mt-4 w-full" id="ev-continue">Continue →</button>');
-            $('#ev-continue').onclick = () => advanceLayer(layerNum);
-          }
-        };
-      });
     }
   }
 
@@ -828,10 +867,11 @@ async function renderCreateStep2_Journey(m) {
   function advanceLayer(layerNum) {
     if (layerNum < 3) {
       S.create._journeyLayer = layerNum + 1;
+      renderJourneyPage();
     } else {
-      S.create._journeyLayer = 4; // Past all layers
+      // All layers done — check synergy then render final review
+      checkSynergy().then(() => renderJourneyPage());
     }
-    renderJourneyPage();
   }
 
   // ── Final review (all 3 layers done) ───────────────────────────────────
@@ -883,7 +923,6 @@ async function renderCreateStep2_Journey(m) {
         <p class="text-sm text-muted mb-3">You've been selected to represent <b class="text-white">${esc(S.create.nationality || 'your country')}</b> at the FIBA U19 World Cup. This is your chance to put your name on the global stage.</p>
         <button class="btn-primary w-full" id="fiba-play">🏆 Play in the Tournament →</button>
       </div>`;
-    $('#fiba-play').onclick = () => runFiba();
   }
 
   async function runFiba() {
@@ -1005,29 +1044,7 @@ async function renderCreateStep2_Journey(m) {
       </div>`;
   }
 
-  // ── Navigation wiring ──────────────────────────────────────────────────
-  function wireNavigation(journeyDone) {
-    const backBtn = $('#c-back-journey');
-    const nextBtn = $('#c-next-journey');
-    if (backBtn) backBtn.onclick = () => { S.create._step = 1; renderCreate($('#main')); };
-    if (!nextBtn) return;
-
-    if (journeyDone) {
-      nextBtn.disabled = false;
-      nextBtn.textContent = 'Continue →';
-      nextBtn.onclick = () => {
-        // Compute path label
-        const labels = ['layer1','layer2','layer3'].map(lid => pathLabelForId(S.create.journey[lid])).filter(Boolean);
-        S.create.pathLabel = labels.join(' → ');
-        S.create._step = 3;
-        S.create.allocs = {};
-        renderCreate($('#main'));
-      };
-    } else {
-      nextBtn.disabled = true;
-      nextBtn.textContent = 'Complete all layers first';
-    }
-  }
+  // ── Navigation is handled by event delegation in wirePathCards() ────────
 }
 
 // === BUILD STEP (formerly step 2, now step 3) ===
