@@ -105,7 +105,7 @@ migrateColumns('players', {
   p_games: 'INTEGER DEFAULT 0', p_min: 'REAL DEFAULT 0', p_pf: 'INTEGER DEFAULT 0',
   p_wins: 'INTEGER DEFAULT 0', p_losses: 'INTEGER DEFAULT 0',
   background: "TEXT DEFAULT 'small_town'",
-  dev_focus: 'TEXT', last_dev_game: 'INTEGER DEFAULT 0',
+  dev_focus: 'TEXT', last_dev_game: 'INTEGER DEFAULT 0', last_career_event_game: 'INTEGER DEFAULT 0',
   retired: 'INTEGER DEFAULT 0',
   retirement_pending: 'INTEGER DEFAULT 0',
   injury_treatment: 'TEXT',
@@ -1017,6 +1017,26 @@ function simulateDraft(playerId, exposureBonus = 0, combineSwingBonus = 0, worko
     .run(draftedTeamId, salary, salary * 3, playerId);
   syncTeammates(playerId, true);
 
+  // Create a rival from the draft class — the closest-pick AI prospect.
+  const playerIdx = allProspects.findIndex(p => p.is_player);
+  const rivalProspect = allProspects.filter(p => !p.is_player)
+    .sort((a, b) => Math.abs(a.overall - draftStock) - Math.abs(b.overall - draftStock))[0];
+  if (rivalProspect) {
+    // Assign the rival to a team based on draft order
+    const rivalPick = allProspects.filter(p => !p.is_player).indexOf(rivalProspect) + 1;
+    const rivalTeamId = draftOrder[Math.min(rivalPick - 1, draftOrder.length - 1)] || choice(ALL_TEAM_IDS);
+    const rivalMeta = {
+      age: rivalProspect.age, trait: choice(['ambitious', 'confident', 'trash talker', 'silent killer', 'flashy']),
+      job: `#${rivalPick} draft pick`, shared: [], last_event: null,
+      ai_name: rivalProspect.name, ai_position: rivalProspect.position,
+      ai_team_id: rivalTeamId, ai_overall: rivalProspect.overall, draft_pick: rivalPick,
+    };
+    db.prepare("INSERT INTO relationships (player_id,name,type,bond,status,meta) VALUES (?,?,?,?,?,?)")
+      .run(playerId, rivalProspect.name, 'rival', 35, 'active', JSON.stringify(rivalMeta));
+    db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,?,?)")
+      .run(playerId, season, 'origin', `Draft rival: ${rivalProspect.name} (${rivalProspect.position}), picked #${rivalPick} by ${TEAMS[rivalTeamId]?.name || 'an NBA team'}.`);
+  }
+
   return { draft_position: draftPosition, draft_round: draftRound, team: draftedTeam.name, team_abbr: draftedTeam.abbr,
            combine_swing: combineSwing, draft_stock: draftStock, rookie_salary: salary, top_prospects: allProspects.slice(0, 10) };
 }
@@ -1118,11 +1138,11 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   // Lower consistency = wilder streaks; high consistency damps the swings.
   const streakScale = 1.4 - consistency / 100 * 0.8;
   let streakMod = 0;
-  if (player.hot_streak > 0) streakMod = Math.min(player.hot_streak * 2.5, 15) * streakScale;
-  else if (player.cold_streak < 0) streakMod = Math.max(player.cold_streak * 2.5, -15) * streakScale;
+  if (player.hot_streak > 0) streakMod = Math.min(player.hot_streak * 2.0, 10) * streakScale;
+  else if (player.cold_streak < 0) streakMod = Math.max(player.cold_streak * 2.0, -10) * streakScale;
   // Morale nudges shot-making: low morale saps the whole team's consistency,
   // high morale steadies it. A small ±3–6% swing around the 75 baseline.
-  const moraleMod = clamp(1 + ((player.morale ?? 75) - 75) / 400, 0.94, 1.06);
+  const moraleMod = clamp(1 + ((player.morale ?? 75) - 75) / 800, 0.97, 1.03);
 
   const roleUsage = { 'Ball-Dominant Creator': 0.33, 'Off-Ball Finisher': 0.21, 'Rim Protector': 0.14, 'Two-Way Wing': 0.25, '3-and-D Specialist': 0.17, 'Point Forward': 0.28, 'Stretch Big': 0.19, 'Defensive Anchor': 0.12 };
   let usageRate = roleUsage[player.role] ?? 0.24;
@@ -1247,7 +1267,7 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
   // Each expected score also gets gaussian noise so there's real game-to-game swing.
   const expTeam = clamp(team.off + (team.off - opp.def) * 0.4 + (home ? 2.5 : 0), 85, 135);
   const expOpp = clamp(opp.off + (opp.off - team.def) * 0.4 + (home ? -2.5 : 0), 85, 135);
-  const STAB = 0.30;
+  const STAB = 0.15;
   teamScore = Math.round(teamScore * (1 - STAB) + (expTeam + gauss(0, 5)) * STAB);
   oppScore = Math.round(oppScore * (1 - STAB) + (expOpp + gauss(0, 5)) * STAB);
   const tRaw = qT.reduce((a, b) => a + b, 0) || 1;
@@ -1389,10 +1409,22 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
     }
   }
   const lifeIntro = hasIntroLifeEvent(playerId);
+  const lifePending = hasPendingLifeEvent(playerId);
+
+  // Check for rival matchup
+  let rivalMatchup = null;
+  const rels = db.prepare("SELECT * FROM relationships WHERE player_id=? AND type='rival' AND status='active'").all(playerId);
+  for (const rel of rels) {
+    let meta = {}; try { meta = JSON.parse(rel.meta || '{}'); } catch {}
+    if (meta.ai_team_id === opponentTeamId) {
+      rivalMatchup = { name: rel.name, bond: rel.bond, overall: meta.ai_overall, draft_pick: meta.draft_pick };
+      break;
+    }
+  }
 
   return { game_number: gameNumber, opponent: opp.name, opponent_abbr: opp.abbr, result, is_home: home ? 1 : 0,
            overtime: overtime > 0 ? overtime : null,
-           team_score: teamScore, opponent_score: oppScore, minutes, box_score: box, advanced: adv, plus_minus: plusMinus, records_broken: recordsBroken, personal_record: personalRecord, franchise_record: franchiseRecord, life_intro: lifeIntro,
+           team_score: teamScore, opponent_score: oppScore, minutes, box_score: box, advanced: adv, plus_minus: plusMinus, records_broken: recordsBroken, personal_record: personalRecord, franchise_record: franchiseRecord, life_intro: lifeIntro, life_pending: lifePending, rival_matchup: rivalMatchup,
            quarters: { team: qT, opp: qO }, team_box: teamBox, opp_box: oppBox,
            fatigue: round1(newFatigue), injury: newInjStatus ? { type: newInjStatus, games: newInjGames } : null,
            fouled_out: fouledOut,
@@ -1708,7 +1740,7 @@ function advanceLeague(playerId, playerTeamId, playerWins, playerLosses) {
     const sched = generateSeasonSchedule(tid, playerId);
     for (let g = played; g < gp; g++) {
       const oppId = sched[Math.min(g, 81)];
-      const win = Math.random() < clamp(0.5 + (eff[tid] - eff[oppId]) * 0.016, 0.04, 0.96);
+      const win = Math.random() < clamp(0.5 + (eff[tid] - eff[oppId]) * 0.018, 0.04, 0.96);
       upsert.run(playerId, tid, season, win ? 1 : 0, win ? 0 : 1, win ? 1 : 0, win ? 0 : 1);
     }
   }
@@ -2193,10 +2225,15 @@ function maybeCareerEvent(playerId) {
   const mode = getLeagueState(playerId).game_mode || 'classic';
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   const flags = new Set(JSON.parse(p.flags || '[]'));
-  let baseChance = mode === 'story' ? 0.10 : 0.05;
-  if (flags.has('public_wedding')) baseChance *= 1.4;
-  // Early career players get more events — the city is noticing you for the first time.
-  if ((p.experience || 0) <= 2) baseChance *= 1.6;
+  // Cooldown: no events within 4 games of the last one, then increasing probability
+  const gamesSinceLast = (p.s_games || 0) - (p.last_career_event_game || 0);
+  if (gamesSinceLast < 4) return null;
+  let baseChance = mode === 'story' ? 0.08 : 0.04;
+  // Ramp up chance the longer since last event (more "random" feeling)
+  if (gamesSinceLast > 8) baseChance += 0.03;
+  if (gamesSinceLast > 15) baseChance += 0.04;
+  if (flags.has('public_wedding')) baseChance *= 1.3;
+  if ((p.experience || 0) <= 2) baseChance *= 1.4;  // Early career gets more
   if (Math.random() >= baseChance) return null;
   const state = getLeagueState(playerId);
   const candidates = CAREER_EVENTS.filter(e => {
@@ -2229,6 +2266,8 @@ function maybeCareerEvent(playerId) {
   const lang = getLeagueState(playerId).lang || 'en';
   db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,'event',?)")
     .run(playerId, state.current_season, pick(ev.title, 'en') + ' — ' + pick(ev.text, 'en'));
+  // Track game number for cooldown
+  db.prepare("UPDATE players SET last_career_event_game=? WHERE id=?").run(p.s_games || 0, playerId);
   return { type: 'event', event: { id: ev.id, title: pick(ev.title, lang), text: pick(ev.text, lang), tone: ev.tone, changes } };
 }
 
@@ -3268,7 +3307,7 @@ function simulateFirstHalf(playerId, opponentTeamId, isPlayoff, isHome) {
   const box = { pts: 0, oreb: 0, dreb: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, fta: 0, ftm: 0, fga_mid: 0 };
   let teamScore = 0, oppScore = 0;
   const TOV_RATE = 0.12 * tactics.myTov;
-  const moraleMod = clamp(1 + ((player.morale ?? 75) - 75) / 400, 0.94, 1.06);
+  const moraleMod = clamp(1 + ((player.morale ?? 75) - 75) / 800, 0.97, 1.03);
   for (let posNum = 1; posNum <= halfPoss; posNum++) {
     const myPossession = Math.random() < 0.50;
     const playerOn = Math.random() < courtPct;
@@ -3753,6 +3792,41 @@ const CAREER_EVENTS = [
   { id: 'pressure_media', title: { en: 'The Media Circus', zh: '媒体围堵' }, tone: 'negative', weight: 2, min_experience: 3,
     text: { en: 'The media has been relentless. Every loss gets dissected on every show. You turned off your phone for a week.', zh: '媒体无孔不入。每场失利都被各个节目反复剖析。你关了一周手机。' },
     effects: { fan_base: [-3, -1], morale: [-3, -1] } },
+
+  // --- New diverse events ---
+  { id: 'teammate_birthday', title: { en: 'Locker-Room Bonding', zh: '更衣室凝聚' }, tone: 'positive', weight: 3,
+    text: { en: 'You organized a surprise birthday for a teammate. The locker room vibe has never been better.', zh: '你给队友策划了一场生日惊喜。更衣室氛围前所未有的好。' },
+    effects: { chemistry: [3, 8], morale: [1, 4] } },
+  { id: 'bad_road_food', title: { en: 'Road Trip Blues', zh: '客场旅途低谷' }, tone: 'negative', weight: 2,
+    text: { en: 'Three games in four nights on the road. Bad food, worse sleep. Your body is running on fumes.', zh: '四天三场客场。吃得差，睡得更差。你的身体快撑不住了。' },
+    effects: { morale: [-4, -1] }, attr_effects: { stamina: [-2, -1] } },
+  { id: 'pickup_legend', title: { en: 'Summer Pickup Legend', zh: '休赛期野球传奇' }, tone: 'positive', weight: 2,
+    text: { en: 'A video of you dominating a summer pickup game at the local park went viral. Fans are calling you "the people\'s champ."', zh: '一段你在本地公园野球场统治比赛的视频火了。球迷叫你"人民冠军"。' },
+    effects: { fan_base: [3, 7], clout: [1, 4] } },
+  { id: 'dm_controversy', title: { en: 'DM Leak', zh: '私信泄露' }, tone: 'negative', weight: 1,
+    text: { en: 'An old DM surfaced online — taken out of context, but the internet doesn\'t care about nuance.', zh: '一条旧私信被翻了出来——断章取义，但互联网不在乎语境。' },
+    effects: { fan_base: [-8, -3], clout: [-3, -1], morale: [-6, -2] } },
+  { id: 'gym_rat', title: { en: 'First In, Last Out', zh: '第一个到，最后一个走' }, tone: 'positive', weight: 3,
+    text: { en: 'Your coach pulled you aside and said he\'s never seen anyone work this hard. The respect in the locker room went up.', zh: '教练把你拉到一边说，从没见过有人这么努力。更衣室里对你的尊重提升了。' },
+    effects: { chemistry: [2, 5] }, attr_effects: { work_ethic: [1, 2] } },
+  { id: 'social_media_beef', title: { en: 'Twitter Fingers', zh: '键盘侠' }, tone: 'negative', weight: 2,
+    text: { en: 'You got into it with a fan on social media. Your PR team was not happy.', zh: '你在社交媒体上和一个球迷吵了起来。你的公关团队很不高兴。' },
+    effects: { fan_base: [-4, -1], clout: [-2, 0], morale: [-3, -1] } },
+  { id: 'allstar_snub', title: { en: 'All-Star Snub', zh: '全明星遗珠' }, tone: 'negative', weight: 2, min_experience: 1,
+    text: { en: 'You were snubbed from the All-Star team despite putting up big numbers. The disrespect fuels you.', zh: '尽管数据亮眼，你还是落选了全明星。这种不被尊重的感觉成了你的燃料。' },
+    effects: { morale: [-4, -1] }, attr_effects: { work_ethic: [1, 3], composure: [-1, 1] } },
+  { id: 'shoe_deal_leak', title: { en: 'Sneaker Deal Rumors', zh: '球鞋合同传闻' }, tone: 'positive', weight: 2, min_experience: 2,
+    text: { en: 'Word leaked that a major brand wants to sign you. Your DMs are blowing up.', zh: '有消息说一个大品牌想签你。你的私信爆了。' },
+    effects: { clout: [2, 5], fan_base: [1, 3] } },
+  { id: 'team_dinner', title: { en: 'Team Dinner Gone Wrong', zh: '球队聚餐翻车' }, tone: 'negative', weight: 2,
+    text: { en: 'A team dinner turned into a heated argument about politics. Awkward practice the next day.', zh: '一次球队聚餐变成了激烈的政治争论。第二天的训练很尴尬。' },
+    effects: { chemistry: [-6, -2], morale: [-3, -1] } },
+  { id: 'local_hero', title: { en: 'Hometown Hero', zh: '家乡英雄' }, tone: 'positive', weight: 2,
+    text: { en: 'Your hometown declared a day in your honor. Your parents were beaming.', zh: '你的家乡为你设立了一个纪念日。你的父母笑得合不拢嘴。' },
+    effects: { fan_base: [3, 6], morale: [3, 6] } },
+  { id: 'late_night_call', title: { en: 'Late-Night Call', zh: '深夜来电' }, tone: 'negative', weight: 2,
+    text: { en: 'An old friend called at 2 AM asking for money. You couldn\'t say no, but you couldn\'t sleep after.', zh: '一个老朋友凌晨两点打电话找你借钱。你没法拒绝，但之后怎么也睡不着了。' },
+    effects: { wealth: [-3, -1], morale: [-4, -1] } },
 ];
 
 const MEDIA_SCENARIOS = [
@@ -4325,17 +4399,29 @@ function hasIntroLifeEvent(playerId) {
 
 // Generate a random identity package for a new NPC.
 function generateNpcMeta(type, playerAge) {
-  const traits = { en: ['ambitious', 'quiet', 'warm', 'stubborn', 'charming', 'anxious', 'loyal', 'bold'], zh: ['野心勃勃', '安静内敛', '温暖体贴', '固执己见', '魅力四射', '容易焦虑', '忠诚可靠', '大胆果断'] };
-  const jobs = { partner: { en: ['medical resident', 'teacher', 'journalist', 'designer', 'lawyer', 'musician'], zh: ['住院医生', '老师', '记者', '设计师', '律师', '音乐人'] }, friend: { en: ['personal trainer', 'barber', 'chef', 'student', 'mechanic'], zh: ['健身教练', '理发师', '厨师', '学生', '修车工'] }, mentor: { en: ['former All-Star', 'retired coach', 'veteran scout'], zh: ['前全明星球员', '退役教练', '资深球探'] }, rival: { en: ['draft class rival', 'rising star', 'trash talker'], zh: ['选秀同届对手', '崛起新星', '垃圾话王'] }, protege: { en: ['rookie', 'young prospect', 'undrafted gem'], zh: ['新秀', '年轻新秀', '落选秀'] }, agent: { en: ['veteran agent', 'rookie agent', 'big-agency exec'], zh: ['资深经纪人', '新晋经纪人', '大公司高管'] } };
+  const traits = {
+    en: ['ambitious', 'quiet', 'warm', 'stubborn', 'charming', 'anxious', 'loyal', 'bold',
+         'sarcastic', 'spiritual', 'competitive', 'laid-back', 'intense', 'nurturing', 'calculating', 'impulsive'],
+    zh: ['野心勃勃', '安静内敛', '温暖体贴', '固执己见', '魅力四射', '容易焦虑', '忠诚可靠', '大胆果断',
+         '爱讽刺', '有信仰', '争强好胜', '随和', '执着', '体贴照顾', '精于算计', '冲动']
+  };
+  const jobs = {
+    partner: { en: ['medical resident', 'teacher', 'journalist', 'designer', 'lawyer', 'musician', 'photographer', 'startup founder', 'social worker'], zh: ['住院医生', '老师', '记者', '设计师', '律师', '音乐人', '摄影师', '创业者', '社工'] },
+    friend: { en: ['personal trainer', 'barber', 'chef', 'student', 'mechanic', 'DJ', 'firefighter', 'real estate agent', 'tattoo artist'], zh: ['健身教练', '理发师', '厨师', '学生', '修车工', 'DJ', '消防员', '房产经纪', '纹身师'] },
+    mentor: { en: ['former All-Star', 'retired coach', 'veteran scout', 'sports psychologist', 'Hall of Famer'], zh: ['前全明星球员', '退役教练', '资深球探', '运动心理学家', '名人堂成员'] },
+    rival: { en: ['draft class rival', 'rising star', 'trash talker', 'silently confident type', 'media darling'], zh: ['选秀同届对手', '崛起新星', '垃圾话王', '沉默自信型', '媒体宠儿'] },
+    protege: { en: ['rookie', 'young prospect', 'undrafted gem', 'G-League call-up', 'international talent'], zh: ['新秀', '年轻新秀', '落选秀', '发展联盟提拔', '国际球员'] },
+    agent: { en: ['veteran agent', 'rookie agent', 'big-agency exec', 'family friend turned agent', 'former player turned agent'], zh: ['资深经纪人', '新晋经纪人', '大公司高管', '家族朋友转经纪人', '前球员转经纪人'] },
+    family: { en: ['retired teacher', 'small business owner', 'nurse', 'factory worker', 'stay-at-home parent'], zh: ['退休教师', '小企业主', '护士', '工厂工人', '全职家长'] }
+  };
   const lang = 'en';
   const pa = playerAge || 22;
-  // Age depends on relationship type — rivals are your age, mentors older, proteges younger.
-  const ageRanges = { partner: [pa - 4, pa + 2], friend: [pa - 5, pa + 5], rival: [pa - 2, pa + 2], mentor: [34, 50], protege: [18, 21], agent: [28, 55] };
-  const [lo, hi] = ageRanges[type] || [20, 38];
+  const ageRanges = { partner: [pa - 4, pa + 2], family: [pa + 22, pa + 42], friend: [pa - 5, pa + 5], rival: [pa - 2, pa + 2], mentor: [34, 50], protege: [18, 21], agent: [28, 55] };
+  const [lo, hi] = ageRanges[type] || [pa + 5, pa + 25];
   const typeTraits = traits[lang];
   const typeJobs = jobs[type] || jobs.friend;
   return {
-    age: clamp(randInt(lo, hi), 18, 55),
+    age: type === 'family' ? clamp(randInt(lo, hi), pa + 18, 65) : clamp(randInt(lo, hi), 18, 55),
     trait: choice(typeTraits),
     job: choice(typeJobs[lang] || typeJobs.friend || ['']),
     shared: [],
@@ -5062,6 +5148,7 @@ app.post('/api/game/simulate-batch/:id', wrap((req) => {
     if (p.retirement_pending) { paused = { type: 'retire', label: '🕊️ Retirement', message: 'Retire now, or play one more year?' }; break; }
     if (p.pending_option) { paused = { type: 'option', label: '📄 Player Option', message: 'Exercise your option, or hit free agency?' }; break; }
     if (hasPendingLifeEvent(req.params.id)) { paused = { type: 'life', label: '👥 Life Event', message: 'Someone in your life is waiting on your answer.' }; break; }
+    if (hasIntroLifeEvent(req.params.id)) { paused = { type: 'life', label: '👥 New Connection', message: 'Someone new has entered your life.' }; break; }
     if (p.media_pending) { paused = { type: 'media', label: '🎤 Media', message: 'A big moment — the media wants your reaction.' }; break; }
     games.push(simulateGame(req.params.id));
   }

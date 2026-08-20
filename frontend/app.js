@@ -2146,12 +2146,13 @@ async function renderSeason(m) {
         <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Season History')}</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs">
           <thead><tr class="text-muted border-b border-bg-border text-left">
-            <th class="py-2 pr-2">S</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="pr-2">PER</th><th class="pr-2">WS</th><th class="pr-2">Record</th><th class="pr-2">Playoffs</th><th>Awards</th>
+            <th class="py-2 pr-2">S</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="pr-2">SPG</th><th class="pr-2">BPG</th><th class="pr-2">PER</th><th class="pr-2">WS</th><th class="pr-2">Record</th><th class="pr-2">Playoffs</th><th>Awards</th>
           </tr></thead>
           <tbody>${sums.seasons.map(su=>`
             <tr class="border-b border-bg-border hover:bg-bg-hover">
               <td class="py-1.5 pr-2 font-bold text-accent">${su.season_number}</td>
               <td class="pr-2 font-bold text-white">${su.ppg}</td><td class="pr-2">${su.rpg}</td><td class="pr-2">${su.apg}</td>
+              <td class="pr-2">${su.spg}</td><td class="pr-2">${su.bpg}</td>
               <td class="pr-2 mono">${su.per}</td><td class="pr-2">${su.ws}</td>
               <td class="pr-2">${su.team_wins}-${su.team_losses}</td><td class="pr-2 text-xs">${su.playoff_result||'—'}</td>
               <td class="text-xs text-accent">${(JSON.parse(su.awards||'[]')).join(', ')||'—'}</td>
@@ -2669,6 +2670,10 @@ async function simGame(btn) {
     $('#g-result').innerHTML = gameResult(r);
     if (r.passive_trade) toast(`🔁 Traded to ${r.passive_trade.to} — ${r.passive_trade.reason}.`,'warn');
     await refreshPlayer(); await refreshSeason(); renderHeader(); await refreshGameProgress();
+    // Pop up life events / career events that need attention
+    if (r.life_intro || r.life_pending) openLifeEventInline();
+    else if (r.event) showCareerEventPopup(r.event);
+    if (r.rival_matchup) showRivalPopup(r.rival_matchup, r);
   } catch(e) { toast('Failed: '+e.message,'error'); }
   finally { btn.disabled = false; btn.innerHTML = '🏀 Play Game'; }
 }
@@ -3067,10 +3072,14 @@ async function openLifeEventInline() {
   try {
     const r = await api(`/life/overview/${S.playerId}`);
     const ev = (r.events || [])[0];
-    if (!ev) { toast('No pending life events.', 'info'); return; }
+    if (!ev) { toast('No pending life events.', 'info'); overlay.remove(); return; }
     const lang = S.season?.lang || 'en';
+    const meta = ev.relationship_id ? (r.relationships||[]).find(x=>x.id===ev.relationship_id)?.meta : null;
+    const metaObj = typeof meta === 'string' ? JSON.parse(meta) : meta;
+    const npcInfo = metaObj ? `<p class="text-xs text-faint mb-2">${metaObj.job||''} · Age ${metaObj.age||'?'} · ${metaObj.trait||''}</p>` : '';
     overlay.innerHTML = `<div class="card p-5 w-full max-w-md max-h-[80vh] flex flex-col">
       <h3 class="text-lg font-bold text-white mb-1">👥 ${ev.intro ? 'New Connection' : (ev.name || 'Life Event')}</h3>
+      ${npcInfo}
       <p class="text-sm text-gray-200 mb-4">"${esc(pick(ev.event.question, lang))}"</p>
       <div class="space-y-2 flex-1 overflow-y-auto">
         ${ev.event.choices.map((c, i) => `<button class="w-full text-left card card-hover p-3 text-sm" data-idx="${i}">${esc(pick(c.text, lang))}</button>`).join('')}
@@ -3089,6 +3098,50 @@ async function openLifeEventInline() {
       };
     });
   } catch(e) { overlay.innerHTML = `<div class="card p-5"><p class="text-bad">${e.message}</p></div>`; document.body.appendChild(overlay); }
+}
+
+// Show a career event as a popup modal after a game.
+function showCareerEventPopup(eventData) {
+  if (!eventData?.event) return;
+  const e = eventData.event;
+  const overlay = document.createElement('div');
+  overlay.id = 'career-event-modal';
+  overlay.className = 'fixed inset-0 z-[75] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4';
+  const isPositive = e.tone === 'positive';
+  overlay.innerHTML = `<div class="card p-5 w-full max-w-md">
+    <h3 class="text-lg font-bold text-white mb-1">${isPositive ? '✨' : '⚠️'} ${esc(e.title)}</h3>
+    <p class="text-sm text-muted mb-4">${esc(e.text)}</p>
+    ${e.changes ? `<div class="flex flex-wrap gap-1.5 mb-3">${Object.entries(e.changes).map(([k,v]) => {
+      const diff = typeof v === 'number' ? v : 0;
+      return `<span class="text-[10px] px-1.5 py-0.5 rounded ${diff >= 0 ? 'bg-good/10 text-good' : 'bg-bad/10 text-bad'}">${k.replace(/_/g,' ')} ${diff >= 0 ? '+' : ''}${diff}</span>`;
+    }).join('')}</div>` : ''}
+    <button class="btn-primary w-full" onclick="document.getElementById('career-event-modal').remove()">Continue</button>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+// Show rival matchup narrative after a game.
+function showRivalPopup(rival, gameResult) {
+  const overlay = document.createElement('div');
+  overlay.id = 'rival-modal';
+  overlay.className = 'fixed inset-0 z-[75] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4';
+  const won = gameResult.result === 'W';
+  const myPts = gameResult.box_score?.pts || 0;
+  const narrative = won
+    ? `You got the better of ${rival.name} tonight. Your team won ${gameResult.team_score}–${gameResult.opponent_score}, and you dropped ${myPts} points. The rivalry intensifies.`
+    : `${rival.name} and their team took this one ${gameResult.opponent_score}–${gameResult.team_score}. You scored ${myPts} points. The sting of this loss will fuel the next matchup.`;
+  overlay.innerHTML = `<div class="card p-5 w-full max-w-md">
+    <div class="flex items-center gap-2 mb-3">
+      <span class="text-3xl">🔥</span>
+      <div>
+        <h3 class="text-lg font-bold text-white">Rivalry Game</h3>
+        <p class="text-xs text-muted">vs ${esc(rival.name)} · Draft pick #${rival.draft_pick} · OVR ${rival.overall}</p>
+      </div>
+    </div>
+    <p class="text-sm text-gray-200 mb-4">${esc(narrative)}</p>
+    <button class="btn-primary w-full" onclick="document.getElementById('rival-modal').remove()">Continue</button>
+  </div>`;
+  document.body.appendChild(overlay);
 }
 
 async function openNotableMedia() {
@@ -3667,11 +3720,14 @@ async function renderCareer(m) {
       </div>
       ${c.seasons?.length?`<div class="card p-5"><h3 class="text-sm font-semibold text-gray-300 mb-3">Season History</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs"><thead><tr class="text-muted border-b border-bg-border text-left">
-          <th class="py-2 pr-2">S</th><th class="pr-2">Team</th><th class="pr-2">Age</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="pr-2">PER</th><th class="pr-2">BPM</th><th class="pr-2">Playoffs</th><th>Awards</th>
+          <th class="py-2 pr-2">S</th><th class="pr-2">Team</th><th class="pr-2">Age</th><th class="pr-2">G</th><th class="pr-2">MPG</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="pr-2">SPG</th><th class="pr-2">BPG</th><th class="pr-2">FG%</th><th class="pr-2">3P%</th><th class="pr-2">PER</th><th class="pr-2">WS</th><th class="pr-2">Playoffs</th><th>Awards</th>
         </tr></thead><tbody>${c.seasons.map(su=>`<tr class="border-b border-bg-border hover:bg-bg-hover">
           <td class="py-1.5 pr-2 font-bold text-accent">${su.season_number}</td><td class="pr-2">${S.teams?.[su.team_id]?.abbr||'T'+su.team_id}</td>
-          <td class="pr-2">${su.age}</td><td class="pr-2 font-bold text-white">${su.ppg}</td><td class="pr-2">${su.rpg}</td><td class="pr-2">${su.apg}</td>
-          <td class="pr-2 mono">${su.per}</td><td class="pr-2 mono">${su.bpm}</td><td class="pr-2 text-xs">${su.playoff_result||'—'}</td>
+          <td class="pr-2">${su.age}</td><td class="pr-2">${su.games_played}</td><td class="pr-2">${su.mpg}</td>
+          <td class="pr-2 font-bold text-white">${su.ppg}</td><td class="pr-2">${su.rpg}</td><td class="pr-2">${su.apg}</td>
+          <td class="pr-2">${su.spg}</td><td class="pr-2">${su.bpg}</td>
+          <td class="pr-2 mono">${(su.fg_pct*100).toFixed(1)}</td><td class="pr-2 mono">${(su.tp_pct*100).toFixed(1)}</td>
+          <td class="pr-2 mono">${su.per}</td><td class="pr-2 mono">${su.ws}</td><td class="pr-2 text-xs">${su.playoff_result||'—'}</td>
           <td class="text-xs text-accent">${(JSON.parse(su.awards||'[]')).join(', ')||'—'}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     </div>`;
   loadCareerEvents();
@@ -4206,6 +4262,10 @@ async function openNPCDetail(relId) {
       </div>
       <div class="space-y-2 mb-4">
         <p class="text-xs text-muted">${n.type} · ${meta.job || '—'} · ${meta.trait || '—'}${age ? ` · ${age}岁` : ''}</p>
+        ${n.type === 'rival' && meta.ai_team_id ? `<div class="bg-bg-hover rounded-lg p-2 mt-1">
+          <p class="text-xs text-cyber font-semibold">⚔️ Rival Profile</p>
+          <p class="text-xs text-muted mt-1">Team: <span class="text-white">${S.teams?.[meta.ai_team_id]?.name || 'Unknown'}</span> · Position: <span class="text-white">${meta.ai_position || '—'}</span> · OVR: <span class="text-accent font-bold">${meta.ai_overall || '?'}</span> · Draft: <span class="text-white">#${meta.draft_pick || '?'}</span></p>
+        </div>` : ''}
         <div class="flex items-center gap-2">
           <span class="text-xs text-muted">Bond</span>
           <div class="bar-track flex-1"><div class="bar-fill" style="width:${n.bond}%;background:${n.bond>=60?'#34d399':n.bond>=40?'#f59e0b':'#f87171'}"></div></div>
