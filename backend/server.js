@@ -5425,9 +5425,12 @@ app.get('/api/player/:id/npc/:relId', wrap((req) => {
 }));
 
 app.get('/api/health', wrap(() => ({ status: 'ok', teams: ALL_TEAM_IDS.length })));
-// Static frontend
+// Static frontend — no-cache HTML so version bumps propagate immediately.
 app.use(express.static(FRONTEND_DIR));
-app.get('/', (req, res) => res.sendFile(path.join(FRONTEND_DIR, 'index.html')));
+app.get('/', (req, res) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(path.join(FRONTEND_DIR, 'index.html'));
+});
 
 if (require.main === module) {
   app.listen(PORT, () => {
