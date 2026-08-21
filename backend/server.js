@@ -5482,8 +5482,8 @@ app.post('/api/career/import', wrap((req) => importCareerJson(req.body || {})));
 
 // Save / load
 app.post('/api/save/:id', wrap((req) => saveGame(req.params.id, req.query.save_name, req.query.description || '')));
-app.get('/api/saves/:id', wrap((req) => ({ saves: listSaves(req.params.id) })));
 app.get('/api/saves/all', wrap(() => ({ saves: listAllSaves() })));
+app.get('/api/saves/:id', wrap((req) => ({ saves: listSaves(req.params.id) })));
 app.delete('/api/save/:saveId', wrap((req) => deleteSave(req.params.saveId)));
 app.post('/api/load/:id', wrap((req) => loadGame(req.params.id, req.query.save_id)));
 app.post('/api/load-save/:saveId', wrap((req) => loadGameById(req.params.saveId)));

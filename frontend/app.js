@@ -20,6 +20,9 @@ const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// Quick inline i18n: L('English', '中文') picks by the active language.
+const L = (en, zh) => (S.season?.lang || localStorage.getItem('bball_lang') || 'en') === 'zh' ? zh : en;
 
 async function api(path, opts={}) {
   const res = await fetch(API+path, { headers:{'Content-Type':'application/json', ...opts.headers}, ...opts });
@@ -477,55 +480,56 @@ async function deletePlayer(playerId) {
 
 function renderCreateStep1(m) {
   const positions = { PG:['Point Guard','🎯'], SG:['Shooting Guard','🔥'], SF:['Small Forward','⚡'], PF:['Power Forward','💪'], C:['Center','🏔️'] };
+  const pn = { PG: L('Point Guard','控球后卫'), SG: L('Shooting Guard','得分后卫'), SF: L('Small Forward','小前锋'), PF: L('Power Forward','大前锋'), C: L('Center','中锋') };
   m.innerHTML = `
     <div class="card p-6">
-      <h2 class="text-xl font-bold text-white mb-1">Create Your Player</h2>
-      <p class="text-sm text-muted mb-6">Choose your identity. Your position shapes your natural strengths.</p>
+      <h2 class="text-xl font-bold text-white mb-1">${L('Create Your Player','创建你的球员')}</h2>
+      <p class="text-sm text-muted mb-6">${L('Choose your identity. Your position shapes your natural strengths.','选择你的身份。你的位置决定了你的天然优势。')}</p>
       <div class="space-y-5">
         <div>
-          <label class="block text-sm font-semibold text-gray-200 mb-1.5">Player Name</label>
-          <input id="c-name" type="text" placeholder="e.g. Victor Storm" value="${esc(S.create.name)}"
+          <label class="block text-sm font-semibold text-gray-200 mb-1.5">${L('Player Name','球员姓名')}</label>
+          <input id="c-name" type="text" placeholder="${L('e.g. Victor Storm','例如：王大力')}" value="${esc(S.create.name)}"
             class="w-full bg-bg border border-bg-border rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:border-accent outline-none">
         </div>
         <div>
-          <label class="block text-sm font-semibold text-gray-200 mb-1.5">Nationality</label>
+          <label class="block text-sm font-semibold text-gray-200 mb-1.5">${L('Nationality','国籍')}</label>
           <select id="c-nat" class="w-full bg-bg border border-bg-border rounded-lg px-3 py-2.5 text-white outline-none">
             ${Object.entries(NATIONALITIES).map(([c,label])=>`<option value="${c}" ${S.create.nationality===c?'selected':''}>${label}</option>`).join('')}
           </select>
         </div>
         <div>
-          <label class="block text-sm font-semibold text-gray-200 mb-2">Position</label>
+          <label class="block text-sm font-semibold text-gray-200 mb-2">${L('Position','位置')}</label>
           <div class="grid grid-cols-5 gap-2">
             ${Object.entries(positions).map(([p,[label,icon]])=>`
               <button data-pos="${p}" class="pos-btn card ${S.create.position===p?'!border-accent !bg-accent/10':''} p-3 text-center card-hover">
                 <div class="text-xl">${icon}</div>
                 <div class="font-bold text-white text-sm">${p}</div>
-                <div class="text-[10px] text-muted leading-tight mt-0.5">${label}</div>
+                <div class="text-[10px] text-muted leading-tight mt-0.5">${pn[p]}</div>
               </button>`).join('')}
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-sm font-semibold text-gray-200 mb-1.5">Age</label>
+            <label class="block text-sm font-semibold text-gray-200 mb-1.5">${L('Age','年龄')}</label>
             <select id="c-age" class="w-full bg-bg border border-bg-border rounded-lg px-3 py-2.5 text-white outline-none">
               ${[19,20,21,22,23].map(a=>`<option ${S.create.age===a?'selected':''}>${a}</option>`).join('')}
             </select>
           </div>
           <div class="flex items-end pb-1">
-            <p class="text-[11px] text-faint">Older prospects are more polished but have less upside.</p>
+            <p class="text-[11px] text-faint">${L('Older prospects are more polished but have less upside.','年龄大的新秀更成熟，但潜力天花板更低。')}</p>
           </div>
         </div>
         <div>
-          <label class="block text-sm font-semibold text-gray-200 mb-1.5">Background / Origin Story</label>
-          <p class="text-xs text-muted mb-2">Where you came from shapes your starting intangibles and ceiling.</p>
+          <label class="block text-sm font-semibold text-gray-200 mb-1.5">${L('Background / Origin Story','背景 / 出身故事')}</label>
+          <p class="text-xs text-muted mb-2">${L('Where you came from shapes your starting intangibles and ceiling.','你的出身塑造了你的初始精神和上限。')}</p>
           <div class="grid grid-cols-1 gap-2" id="c-bg-list">
-            <p class="text-xs text-faint">Loading backgrounds…</p>
+            <p class="text-xs text-faint">${L('Loading backgrounds…','加载背景中…')}</p>
           </div>
           <p class="text-xs text-faint mt-2" id="c-bg-desc"></p>
         </div>
       </div>
       <div class="mt-6 flex justify-end">
-        <button class="btn-primary" id="c-next1">Continue →</button>
+        <button class="btn-primary" id="c-next1">${L('Continue →','继续 →')}</button>
       </div>
     </div>`;
   $$('.pos-btn', m).forEach(b => b.onclick = () => { S.create.position = b.dataset.pos; $$('.pos-btn',m).forEach(x=>x.classList.remove('!border-accent','!bg-accent/10')); b.classList.add('!border-accent','!bg-accent/10'); });
@@ -545,13 +549,13 @@ function renderCreateStep1(m) {
       b.classList.add('!border-accent','!bg-accent/10');
       $('#c-bg-desc').textContent = 'Effects: ' + Object.entries(bgs[S.create.background].effects||{}).map(([k,v])=>`${k.replace(/_/g,' ')} ${v>0?'+':''}${v}`).join(', ');
     });
-    $('#c-bg-desc').textContent = 'Effects: ' + Object.entries(bgs[S.create.background].effects||{}).map(([k,v])=>`${k.replace(/_/g,' ')} ${v>0?'+':''}${v}`).join(', ');
+    $('#c-bg-desc').textContent = L('Effects: ','效果：') + Object.entries(bgs[S.create.background].effects||{}).map(([k,v])=>`${k.replace(/_/g,' ')} ${v>0?'+':''}${v}`).join(', ');
   };
   if (S.create._backgrounds) renderBg();
-  else api('/player/backgrounds').then(d => { S.create._backgrounds = d.backgrounds; renderBg(); }).catch(()=>{ $('#c-bg-list').innerHTML = '<p class="text-xs text-faint">Backgrounds unavailable.</p>'; });
+  else api('/player/backgrounds').then(d => { S.create._backgrounds = d.backgrounds; renderBg(); }).catch(()=>{ $('#c-bg-list').innerHTML = `<p class="text-xs text-faint">${L('Backgrounds unavailable.','背景不可用。')}</p>`; });
   $('#c-next1').onclick = () => {
     const name = $('#c-name').value.trim();
-    if (!name) { toast('Please enter a name','warn'); return; }
+    if (!name) { toast(L('Please enter a name','请输入姓名'),'warn'); return; }
     S.create.name = name; S.create.age = parseInt($('#c-age').value); S.create.nationality = $('#c-nat').value;
     S.create._step = 2; renderCreate($('#main'));
   };
@@ -582,20 +586,20 @@ async function renderCreateStep2_Journey(m) {
 
   // ── Constants ──────────────────────────────────────────────────────────
   const layerKeys   = ['childhood', 'teen', 'predraft'];
-  const layerLabels = ['Childhood', 'Teenage', 'Pre-Draft'];
+  const layerLabels = [L('Childhood','童年'), L('Teenage','少年'), L('Pre-Draft','选秀前')];
   const layerIcons  = ['🌱', '🏀', '🎓'];
-  const layerAges   = ['(Age 6-12)', '(Age 13-17)', '(Age 17-19)'];
+  const layerAges   = [L('(Age 6-12)','(6-12岁)'), L('(Age 13-17)','(13-17岁)'), L('(Age 17-19)','(17-19岁)')];
 
   // ── Loading screen ─────────────────────────────────────────────────────
   m.innerHTML = `
     <div class="card p-6">
       <div class="flex items-center gap-3 mb-1">
         <span class="text-2xl">🗺️</span>
-        <div><h2 class="text-xl font-bold text-white">Your Journey to the Draft</h2>
-        <p class="text-sm text-muted">Every path is different. Where you come from shapes who you become.</p></div>
+        <div><h2 class="text-xl font-bold text-white">${L('Your Journey to the Draft','你的选秀之路')}</h2>
+        <p class="text-sm text-muted">${L('Every path is different. Where you come from shapes who you become.','每条路都不同。你从哪里来，塑造了你会成为谁。')}</p></div>
       </div>
-      <div class="mt-8 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-xs text-muted">Loading journey paths…</p></div>
-      <div class="mt-6 flex justify-between" id="j-nav"><button class="btn-secondary" id="c-back-journey">← Back</button><span></span></div>
+      <div class="mt-8 text-center"><div class="spinner mx-auto mb-3"></div><p class="text-xs text-muted">${L('Loading journey paths…','加载成长路径中…')}</p></div>
+      <div class="mt-6 flex justify-between" id="j-nav"><button class="btn-secondary" id="c-back-journey">← ${L('Back','返回')}</button><span></span></div>
     </div>`;
   $('#c-back-journey').onclick = () => { S.create._step = 1; renderCreate($('#main')); };
 
@@ -608,14 +612,14 @@ async function renderCreateStep2_Journey(m) {
       try {
         const data = await api(`/journey/paths?nationality=${S.create.nationality || 'USA'}`);
         S.create._journeyPaths = data.paths;
-      } catch(e) { toast('Failed to load journey paths — make sure the server is running.','error'); return; }
+      } catch(e) { toast(L('Failed to load journey paths — make sure the server is running.','加载成长路径失败——请确认服务器正在运行。'),'error'); return; }
     }
     paths = S.create._journeyPaths;
     if (!paths) {
       m.innerHTML = `<div class="card p-6 text-center">
-        <p class="text-bad font-semibold mb-2">⚠️ Failed to load journey paths</p>
-        <p class="text-sm text-muted mb-4">The server may be starting up. Try again in a moment.</p>
-        <button class="btn-primary" onclick="S.create._step=2;renderCreate($('#main'))">Retry</button>
+        <p class="text-bad font-semibold mb-2">⚠️ ${L('Failed to load journey paths','加载成长路径失败')}</p>
+        <p class="text-sm text-muted mb-4">${L('The server may be starting up. Try again in a moment.','服务器可能正在启动。请稍后再试。')}</p>
+        <button class="btn-primary" onclick="S.create._step=2;renderCreate($('#main'))">${L('Retry','重试')}</button>
         <button class="btn-secondary ml-2" onclick="S.create._step=1;renderCreate($('#main'))">← Back</button>
       </div>`;
       return;
@@ -677,8 +681,8 @@ async function renderCreateStep2_Journey(m) {
       <div class="card p-6">
         <div class="flex items-center gap-3 mb-1">
           <span class="text-2xl">🗺️</span>
-          <div><h2 class="text-xl font-bold text-white">Your Journey to the Draft</h2>
-          <p class="text-sm text-muted">Every path is different. Where you come from shapes who you become.</p></div>
+          <div><h2 class="text-xl font-bold text-white">${L('Your Journey to the Draft','你的选秀之路')}</h2>
+          <p class="text-sm text-muted">${L('Every path is different. Where you come from shapes who you become.','每条路都不同。你从哪里来，塑造了你会成为谁。')}</p></div>
         </div>
 
         <!-- Timeline -->
@@ -712,7 +716,7 @@ async function renderCreateStep2_Journey(m) {
         <!-- Navigation -->
         <div class="mt-6 flex justify-between" id="j-nav">
           <button class="btn-secondary" id="c-back-journey">← Back</button>
-          <button class="btn-primary" id="c-next-journey">Continue →</button>
+          ${journeyDone ? '<button class="btn-primary" id="c-next-journey">Continue →</button>' : `<span class="text-xs text-faint self-center">${L('Complete your journey to continue','完成成长之路后才能继续')}</span>`}
         </div>
       </div>`;
 
@@ -779,7 +783,7 @@ async function renderCreateStep2_Journey(m) {
   // ── Path selection cards ────────────────────────────────────────────────
   function renderPathCards(layerNum, layerKey, options) {
     return `
-      <p class="text-sm font-semibold text-white mb-3">Choose your ${layerLabels[layerNum-1].toLowerCase()} path ${layerAges[layerNum-1]}:</p>
+      <p class="text-sm font-semibold text-white mb-3">${L('Choose your','选择你的')} ${layerLabels[layerNum-1].toLowerCase()} ${L('path','成长路径')} ${layerAges[layerNum-1]}:</p>
       <div class="grid gap-3" id="path-cards-grid">
         ${options.map(opt => `
           <button class="journey-choice card card-hover p-4 text-left cursor-pointer" data-path-id="${opt.id}" data-layer="${layerKey}">
@@ -1149,27 +1153,27 @@ function renderCreateStep2(m) {
   if (!S.create.weight) S.create.weight = Math.round((wlo+whi)/2);
   m.innerHTML = `
     <div class="card p-6">
-      <h2 class="text-xl font-bold text-white mb-1">Set Your Build</h2>
-      <p class="text-sm text-muted mb-6">Height and weight affect your available skill points and physical profile.</p>
+      <h2 class="text-xl font-bold text-white mb-1">${L('Set Your Build','设定你的身材')}</h2>
+      <p class="text-sm text-muted mb-6">${L('Height and weight affect your available skill points and physical profile.','身高和体重影响你可用的技能点和身体特征。')}</p>
       <div class="space-y-6">
         <div>
-          <div class="flex justify-between mb-2"><label class="text-sm font-semibold text-gray-200">Height</label><span class="mono text-accent font-bold" id="c-height-val">${S.create.height.toFixed(2)}m</span></div>
+          <div class="flex justify-between mb-2"><label class="text-sm font-semibold text-gray-200">${L('Height','身高')}</label><span class="mono text-accent font-bold" id="c-height-val">${S.create.height.toFixed(2)}m</span></div>
           <input type="range" id="c-height" min="${hlo}" max="${hhi}" step="0.01" value="${S.create.height}"
             class="w-full">
           <div class="flex justify-between text-[10px] text-faint mt-1"><span>${hlo}m</span><span>${hhi}m</span></div>
         </div>
         <div>
-          <div class="flex justify-between mb-2"><label class="text-sm font-semibold text-gray-200">Weight</label><span class="mono text-accent font-bold" id="c-weight-val">${S.create.weight}kg</span></div>
+          <div class="flex justify-between mb-2"><label class="text-sm font-semibold text-gray-200">${L('Weight','体重')}</label><span class="mono text-accent font-bold" id="c-weight-val">${S.create.weight}kg</span></div>
           <input type="range" id="c-weight" min="${wlo}" max="${whi}" step="1" value="${S.create.weight}" class="w-full">
           <div class="flex justify-between text-[10px] text-faint mt-1"><span>${wlo}kg</span><span>${whi}kg</span></div>
         </div>
         <div class="bg-bg-hover border border-bg-border rounded-lg p-4">
-          <p class="text-xs text-muted"><span class="text-white font-semibold">Build shapes your body:</span> Height nudges <b class="text-cyber">block</b>, <b class="text-cyber">rebound</b> and <b class="text-warn">speed</b>; weight nudges <b class="text-warn">strength</b> and <b class="text-warn">speed</b>. Pick the body that fits your game.</p>
+          <p class="text-xs text-muted"><span class="text-white font-semibold">${L('Build shapes your body:','身材影响身体：')}</span> ${L('Height nudges','身高影响')} <b class="text-cyber">${L('block','封盖')}</b>, <b class="text-cyber">${L('rebound','篮板')}</b> ${L('and','和')} <b class="text-warn">${L('speed','速度')}</b>; ${L('weight nudges','体重影响')} <b class="text-warn">${L('strength','力量')}</b> ${L('and','和')} <b class="text-warn">${L('speed','速度')}</b>. ${L('Pick the body that fits your game.','选择适合你打法的身体。')}</p>
         </div>
       </div>
       <div class="mt-6 flex justify-between">
-        <button class="btn-secondary" id="c-back2">← Back</button>
-        <button class="btn-primary" id="c-next2">Allocate Skills →</button>
+        <button class="btn-secondary" id="c-back2">← ${L('Back','返回')}</button>
+        <button class="btn-primary" id="c-next2">${L('Allocate Skills →','分配技能 →')}</button>
       </div>
     </div>`;
   $('#c-height').oninput = e => { S.create.height = parseFloat(e.target.value); $('#c-height-val').textContent = S.create.height.toFixed(2)+'m'; };
@@ -1180,18 +1184,19 @@ function renderCreateStep2(m) {
 
 function renderCreateStep3(m) {
   const cats = { outside:'🎯', inside:'🏀', athleticism:'⚡', playmaking:'👁️', defense:'🛡️', mental:'🧠' };
+  const catZh = { outside:'外线得分', inside:'内线得分', athleticism:'运动能力', playmaking:'组织进攻', defense:'防守', mental:'精神属性' };
   m.innerHTML = `
     <div class="card p-6">
       <div class="flex items-center justify-between mb-1">
-        <h2 class="text-xl font-bold text-white">Allocate Skill Points</h2>
-        <div class="text-right"><div class="text-2xl font-black text-accent mono" id="c-remaining">—</div><div class="text-[11px] text-muted" id="c-remaining-label">points remaining</div></div>
+        <h2 class="text-xl font-bold text-white">${L('Allocate Skill Points','分配技能点')}</h2>
+        <div class="text-right"><div class="text-2xl font-black text-accent mono" id="c-remaining">—</div><div class="text-[11px] text-muted" id="c-remaining-label">${L('points remaining','剩余点数')}</div></div>
       </div>
-      <p class="text-sm text-muted mb-1">Distribute your points across skill categories. Categories with higher natural aptitude are your position's strengths.</p>
-      <p class="text-xs text-faint mb-5" id="c-pool-note">Loading…</p>
+      <p class="text-sm text-muted mb-1">${L('Distribute your points across skill categories. Categories with higher natural aptitude are your position\'s strengths.','在各技能类别中分配你的点数。天生属性更高的类别是你位置的强项。')}</p>
+      <p class="text-xs text-faint mb-5" id="c-pool-note">${L('Loading…','加载中…')}</p>
       <div class="space-y-3" id="c-cats"></div>
       <div class="mt-6 flex justify-between">
-        <button class="btn-secondary" id="c-back3">← Back</button>
-        <button class="btn-primary" id="c-next3">Go to Draft →</button>
+        <button class="btn-secondary" id="c-back3">← ${L('Back','返回')}</button>
+        <button class="btn-primary" id="c-next3">${L('Go to Draft →','进入选秀 →')}</button>
       </div>
     </div>`;
 
@@ -1231,8 +1236,8 @@ function renderCreateStep3(m) {
           <div class="flex items-center justify-between mb-1.5">
             <div class="flex items-center gap-2">
               <span>${icon}</span>
-              <span class="text-sm font-semibold text-white">${cat.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span>
-              ${isNatural?'<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">natural fit</span>':''}
+              <span class="text-sm font-semibold text-white">${L(cat.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase()), catZh[cat])}</span>
+              ${isNatural?`<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">${L('natural fit','天赋位置')}</span>`:''}
             </div>
             <span class="mono font-bold text-white" data-val="${cat}">${S.create.allocs[cat]||0}</span>
           </div>
@@ -1312,13 +1317,13 @@ async function renderCreateStep5_Combine(m) {
 
   m.innerHTML = `
     <div class="card p-6">
-      <h2 class="text-xl font-bold text-white mb-1">NBA Draft Combine</h2>
-      <p class="text-sm text-muted mb-5">Physical testing, shooting drills, and a 5-on-5 scrimmage. This is where you prove yourself.</p>
+      <h2 class="text-xl font-bold text-white mb-1">${L('NBA Draft Combine','NBA联合试训')}</h2>
+      <p class="text-sm text-muted mb-5">${L('Physical testing, shooting drills, and a 5-on-5 scrimmage. This is where you prove yourself.','体测、投篮训练和5对5对抗赛。这是你证明自己的地方。')}</p>
 
       <!-- Combine Results -->
       <div class="bg-bg-hover border border-bg-border rounded-lg p-4 mb-4">
         <div class="flex items-center justify-between mb-3">
-          <span class="text-sm font-semibold text-white">📋 Combine Results</span>
+          <span class="text-sm font-semibold text-white">📋 ${L('Combine Results','试训结果')}</span>
           <span class="mono text-lg font-bold ${c.combine_score>=70?'text-good':c.combine_score>=55?'text-accent':'text-bad'}">${c.combine_score}</span>
         </div>
         <div class="space-y-2">
@@ -1344,7 +1349,7 @@ async function renderCreateStep5_Combine(m) {
             <span class="mono text-xs font-bold ${gradeClass(c.scrimmage)} w-8 text-right">${c.scrimmage}</span>
           </div>
         </div>
-        <p class="text-xs text-faint mt-3">Combine swing: <span class="${c.combine_swing>=0?'text-good':'text-bad'} font-bold">${c.combine_swing>=0?'+':''}${c.combine_swing}</span></p>
+        <p class="text-xs text-faint mt-3">${L('Combine swing:','试训加成：')} <span class="${c.combine_swing>=0?'text-good':'text-bad'} font-bold">${c.combine_swing>=0?'+':''}${c.combine_swing}</span></p>
       </div>
 
       <!-- Flashback moment -->
@@ -1352,8 +1357,8 @@ async function renderCreateStep5_Combine(m) {
 
       <!-- Team Workouts -->
       <div class="mb-4">
-        <p class="text-sm font-semibold text-white mb-2">🏋️ Select 2-3 Team Workouts</p>
-        <p class="text-xs text-muted mb-3">Pick teams to work out for. A good showing can boost your draft stock with that team.</p>
+        <p class="text-sm font-semibold text-white mb-2">🏋️ ${L('Select 2-3 Team Workouts','选择2-3支球队试训')}</p>
+        <p class="text-xs text-muted mb-3">${L('Pick teams to work out for. A good showing can boost your draft stock with that team.','选择去哪些队试训。表现出色可以提升那支球队对你的选秀评价。')}</p>
         <div class="grid grid-cols-2 gap-2" id="workout-grid">
           ${workoutOpts.map(t => {
             const isSelected = selected.includes(t.id);
@@ -1365,7 +1370,7 @@ async function renderCreateStep5_Combine(m) {
                   <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg text-faint">OVR ${t.ovr}</span>
                 </div>
                 <p class="text-[10px] text-muted mt-0.5">${esc(t.name)}</p>
-                <p class="text-[10px] text-faint">Needs: ${t.need}</p>
+                <p class="text-[10px] text-faint">${L('Needs','需求')}: ${t.need}</p>
                 ${result ? `<p class="text-xs mt-2 ${result.result==='impressed'?'text-good':result.result==='disappointing'?'text-bad':'text-muted'}">${esc(result.narrative)}</p>` : ''}
               </button>`;
           }).join('')}
@@ -1374,8 +1379,8 @@ async function renderCreateStep5_Combine(m) {
 
       <!-- Mock Draft Projection -->
       <div class="bg-bg-hover border border-bg-border rounded-lg p-4 mb-4">
-        <p class="text-xs font-semibold text-gray-200 mb-2">📈 Draft Projection</p>
-        <p class="text-sm text-muted">Based on your combine performance and exposure:
+        <p class="text-xs font-semibold text-gray-200 mb-2">📈 ${L('Draft Projection','选秀预测')}</p>
+        <p class="text-sm text-muted">${L('Based on your combine performance and exposure:','基于你的试训表现和曝光度：')}
           <span class="font-bold ${S.create.exposure + S.create.combineSwing >= 3 ? 'text-good' : S.create.exposure + S.create.combineSwing <= -3 ? 'text-bad' : 'text-accent'}">
             ${getDraftProjection()}
           </span>
@@ -1384,8 +1389,8 @@ async function renderCreateStep5_Combine(m) {
 
       <!-- Navigation -->
       <div class="mt-6 flex justify-between">
-        <button class="btn-secondary" id="c-back-combine">← Back</button>
-        <button class="btn-primary" id="c-next-combine">Draft Night →</button>
+        <button class="btn-secondary" id="c-back-combine">← ${L('Back','返回')}</button>
+        <button class="btn-primary" id="c-next-combine">${L('Draft Night →','选秀之夜 →')}</button>
       </div>
     </div>`;
 
@@ -1433,11 +1438,11 @@ function getCombineFlashback() {
 
 function getDraftProjection() {
   const score = S.create.exposure + S.create.combineSwing;
-  if (score >= 8) return 'Lottery pick (Top 14)';
-  if (score >= 4) return 'First round (15-30)';
-  if (score >= 0) return 'Early second round (31-45)';
-  if (score >= -4) return 'Late second round (45-60)';
-  return 'On the bubble / undrafted';
+  if (score >= 8) return L('Lottery pick (Top 14)','乐透签（前14）');
+  if (score >= 4) return L('First round (15-30)','首轮（15-30）');
+  if (score >= 0) return L('Early second round (31-45)','次轮前半段（31-45）');
+  if (score >= -4) return L('Late second round (45-60)','次轮后半段（45-60）');
+  return L('On the bubble / undrafted','边缘 / 落选');
 }
 
 function renderDraftNight(m) {
@@ -1446,12 +1451,12 @@ function renderDraftNight(m) {
   m.innerHTML = `
     <div class="card p-8 text-center" id="draft-panel">
       <div class="text-5xl mb-3">🎟️</div>
-      <h2 class="text-2xl font-bold text-white mb-2">NBA Draft Night</h2>
-      <p class="text-muted mb-2">${esc(S.create.name)}, the draft is about to begin.</p>
-      ${pathNarrative ? `<p class="text-sm text-cyber mb-4 italic">"${esc(pathNarrative)}"</p>` : '<p class="text-muted mb-4">Your combine results and journey will determine where you land.</p>'}
+      <h2 class="text-2xl font-bold text-white mb-2">${L('NBA Draft Night','NBA选秀之夜')}</h2>
+      <p class="text-muted mb-2">${esc(S.create.name)}${L(', the draft is about to begin.', '，选秀即将开始。')}</p>
+      ${pathNarrative ? `<p class="text-sm text-cyber mb-4 italic">"${esc(pathNarrative)}"</p>` : `<p class="text-muted mb-4">${L('Your combine results and journey will determine where you land.','你的试训表现和成长之路将决定你的顺位。')}</p>`}
       ${pre ? `
         <div class="bg-bg-hover border border-bg-border rounded-lg p-3 mb-4 inline-block text-left">
-          <p class="text-[10px] text-faint uppercase tracking-wider mb-1">${esc(pre.league)} · Scout Report</p>
+          <p class="text-[10px] text-faint uppercase tracking-wider mb-1">${esc(pre.league)} · ${L('Scout Report','球探报告')}</p>
           <div class="flex gap-5">
             <div class="text-center"><div class="mono text-xl font-bold text-accent">${pre.ppg}</div><div class="text-[10px] text-muted">PPG</div></div>
             <div class="text-center"><div class="mono text-xl font-bold text-cyber">${pre.rpg}</div><div class="text-[10px] text-muted">RPG</div></div>
@@ -1460,8 +1465,8 @@ function renderDraftNight(m) {
           </div>
         </div>` : ''}
       <div class="flex justify-center gap-3">
-        <button class="btn-secondary" id="draft-back">← Back to Combine</button>
-        <button class="btn-primary" id="draft-start">Enter the Draft</button>
+        <button class="btn-secondary" id="draft-back">← ${L('Back to Combine','返回试训')}</button>
+        <button class="btn-primary" id="draft-start">${L('Enter the Draft','进入选秀')}</button>
       </div>
     </div>`;
   $('#draft-back').onclick = () => { S.create._step = 5; renderCreate($('#main')); };
@@ -1553,18 +1558,18 @@ function generatePreDraftStats() {
 
   // League-specific scoring baselines (realistic for prospects).
   const leagues = {
-    ncaa_d1:      { label: 'NCAA Division I',   base_ppg: 16, base_rpg: 6, base_apg: 3 },
-    ncaa_lower:   { label: 'NCAA D2/D3',        base_ppg: 22, base_rpg: 8, base_apg: 3 },
-    gleague:      { label: 'G-League Ignite',   base_ppg: 18, base_rpg: 6, base_apg: 3 },
-    ncaa_us:      { label: 'NCAA (USA)',        base_ppg: 15, base_rpg: 6, base_apg: 3 },
-    cba:          { label: 'CBA',               base_ppg: 19, base_rpg: 6, base_apg: 3 },
-    nbl:          { label: 'NBL (Australia)',   base_ppg: 16, base_rpg: 6, base_apg: 3 },
-    draft_direct: { label: 'Direct Entry',      base_ppg: 0,  base_rpg: 0, base_apg: 0 },
-    euroleague:   { label: 'EuroLeague',        base_ppg: 11, base_rpg: 5, base_apg: 3 },
-    domestic_first:{ label: 'Domestic League',  base_ppg: 17, base_rpg: 6, base_apg: 3 },
-    local_pro:    { label: 'Local Pro League',  base_ppg: 20, base_rpg: 7, base_apg: 3 },
+    ncaa_d1:      { label: L('NCAA Division I','NCAA一级联赛'),   base_ppg: 16, base_rpg: 6, base_apg: 3 },
+    ncaa_lower:   { label: L('NCAA D2/D3','NCAA二级/三级联赛'),    base_ppg: 22, base_rpg: 8, base_apg: 3 },
+    gleague:      { label: L('G-League Ignite','发展联盟点燃队'),   base_ppg: 18, base_rpg: 6, base_apg: 3 },
+    ncaa_us:      { label: L('NCAA (USA)','NCAA（美国）'),         base_ppg: 15, base_rpg: 6, base_apg: 3 },
+    cba:          { label: L('CBA','CBA'),                        base_ppg: 19, base_rpg: 6, base_apg: 3 },
+    nbl:          { label: L('NBL (Australia)','NBL（澳大利亚）'),  base_ppg: 16, base_rpg: 6, base_apg: 3 },
+    draft_direct: { label: L('Direct Entry','直接参选'),            base_ppg: 0,  base_rpg: 0, base_apg: 0 },
+    euroleague:   { label: L('EuroLeague','欧洲联赛'),             base_ppg: 11, base_rpg: 5, base_apg: 3 },
+    domestic_first:{ label: L('Domestic League','本国联赛'),       base_ppg: 17, base_rpg: 6, base_apg: 3 },
+    local_pro:    { label: L('Local Pro League','本国职业联赛'),   base_ppg: 20, base_rpg: 7, base_apg: 3 },
   };
-  const league = leagues[predraft] || { label: 'Pre-Draft League', base_ppg: 15, base_rpg: 6, base_apg: 3 };
+  const league = leagues[predraft] || { label: L('Pre-Draft League','选秀前联赛'), base_ppg: 15, base_rpg: 6, base_apg: 3 };
   if (!league.base_ppg) return null; // direct entry — no league stats
 
   // Position shapes rebounds/assists.
@@ -1583,14 +1588,14 @@ function buildJourneyEntries() {
   const entries = [];
   const nat = S.create.nationality || 'USA';
   const paths = S.create._journeyPaths;
-  const labels = { childhood: 'Grew up', teen: 'Developed', predraft: 'Pre-draft' };
-  entries.push(`Born in ${nat}.`);
+  const labels = { childhood: L('Grew up','成长于'), teen: L('Developed','发展于'), predraft: L('Pre-draft','选秀前') };
+  entries.push(`${L('Born in','出生于')} ${nat}.`);
   if (paths) {
     for (const [i, key] of ['childhood','teen','predraft'].entries()) {
       const choice = S.create.journey['layer'+(i+1)];
       if (choice && paths[key]) {
         const opt = paths[key].find(o => o.id === choice);
-        if (opt) entries.push(`${labels[key]} through: ${opt.label}.`);
+        if (opt) entries.push(`${labels[key]} ${L('through:','经历：')} ${opt.label}.`);
       }
     }
   }
@@ -1598,19 +1603,19 @@ function buildJourneyEntries() {
   const preDraftStats = generatePreDraftStats();
   if (preDraftStats && S.create.journey?.layer3) {
     S.create.preDraftStats = preDraftStats;
-    entries.push(`Pre-draft in ${preDraftStats.league}: ${preDraftStats.ppg} PPG, ${preDraftStats.rpg} RPG, ${preDraftStats.apg} APG over ${preDraftStats.gp} games (${preDraftStats.pct}% FG).`);
+    entries.push(`${L('Pre-draft in','选秀前效力于')} ${preDraftStats.league}: ${L('场均','avg')} ${preDraftStats.ppg} ${L('分','pts')} ${preDraftStats.rpg} ${L('板','reb')} ${preDraftStats.apg} ${L('助','ast')}（${preDraftStats.gp}${L('场',' games')}，命中率${preDraftStats.pct}%）.`);
   }
   if (S.create._fibaResult) {
     const r = S.create._fibaResult;
-    const medalStr = r.medal ? `, ${r.medal} medal` : '';
-    entries.push(`Represented ${nat} at ${r.tournament}${medalStr} — ${r.ppg} PPG, ${r.rpg} RPG, ${r.apg} APG.`);
+    const medalStr = r.medal ? `, ${r.medal} ${L('medal','奖牌')}` : '';
+    entries.push(`${L('Represented','代表')} ${nat} ${L('at','参加')} ${r.tournament}${medalStr} — ${r.ppg} PPG, ${r.rpg} RPG, ${r.apg} APG.`);
   }
   if (S.create.combineResult) {
-    entries.push(`NBA Draft Combine score: ${S.create.combineResult.combine_score}.`);
+    entries.push(`${L('NBA Draft Combine score:','NBA联合试训得分：')} ${S.create.combineResult.combine_score}.`);
   }
   if (S.create.workoutTeams.length) {
     const names = S.create.workoutResults.map(r => r.team || r.team_abbr);
-    if (names.length) entries.push(`Worked out for: ${names.join(', ')}.`);
+    if (names.length) entries.push(`${L('Worked out for:','试训球队：')} ${names.join(', ')}.`);
   }
   return entries;
 }
