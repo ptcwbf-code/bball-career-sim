@@ -176,6 +176,10 @@ async function boot() {
   // Mobile bottom nav — switch tabs and highlight.
   $$('#mobile-nav [data-mnav]').forEach(b => b.onclick = () => switchTab(b.dataset.mnav));
   await refreshSeason();
+  // refreshSeason() resets S.season to null when there's no player — re-apply
+  // the stored global language so the initial screen keeps it.
+  if (!S.player && !S.season) S.season = { lang: localStorage.getItem('bball_lang') || 'en' };
+  else if (!S.player) S.season.lang = localStorage.getItem('bball_lang') || S.season.lang || 'en';
   renderTabs();
   renderHeader();
   if (S.player) switchTab('dashboard'); else switchTab('create');
@@ -310,17 +314,27 @@ function resetCreate() {
 
 function renderCreate(m) {
   const step = S.create._step || 1;
-  const steps = [['Identity','Name & bg'],['Journey','Growth path'],['Build','Height & weight'],['Skills','Allocate pts'],['Combine','Tryouts'],['Draft','Draft night']];
+  const lang = S.season?.lang || localStorage.getItem('bball_lang') || 'en';
+  const steps = lang === 'zh'
+    ? [['身份','名字与背景'],['成长','成长之路'],['体魄','身高体重'],['技能','分配点数'],['试训','联合试训'],['选秀','选秀之夜']]
+    : [['Identity','Name & bg'],['Journey','Growth path'],['Build','Height & weight'],['Skills','Allocate pts'],['Combine','Tryouts'],['Draft','Draft night']];
   m.innerHTML = `
     <div class="max-w-2xl mx-auto">
+      <div class="flex items-center justify-end gap-2 mb-4">
+        <button class="btn-ghost !py-1 !px-2.5 text-xs ${lang==='en'?'!text-accent':''}" onclick="setGlobalLang('en')">EN</button>
+        <button class="btn-ghost !py-1 !px-2.5 text-xs ${lang==='zh'?'!text-accent':''}" onclick="setGlobalLang('zh')">中文</button>
+      </div>
       <div class="card p-4 mb-5" id="create-saves" style="display:none">
-        <p class="text-sm font-semibold text-white mb-2">💾 Resume a career</p>
+        <div class="flex items-center justify-between mb-2">
+          <p class="text-sm font-semibold text-white">💾 ${lang==='zh'?'继续生涯':'Resume a career'}</p>
+          <button class="btn-secondary !py-1 !px-3 text-xs" id="import-career-btn" onclick="importCareerFile()">📤 ${lang==='zh'?'导入存档':'Import'}</button>
+        </div>
         <div id="create-saves-list" class="text-sm text-muted">Loading…</div>
       </div>
       ${S.player ? `
       <div class="card p-4 mb-5 border-warn/30 bg-warn/5">
-        <p class="text-sm text-warn">⚠️ You already have a career in progress (<b>${esc(S.player.name)}</b>). Creating a new player will start over.</p>
-        <button class="btn-secondary mt-2" onclick="switchTab('dashboard')">← Back to My Career</button>
+        <p class="text-sm text-warn">${lang==='zh'?`⚠️ 你已有一段进行中的生涯（<b>${esc(S.player.name)}</b>）。创建新球员将重新开始。`:`⚠️ You already have a career in progress (<b>${esc(S.player.name)}</b>). Creating a new player will start over.`}</p>
+        <button class="btn-secondary mt-2" onclick="switchTab('dashboard')">← ${lang==='zh'?'返回我的生涯':'Back to My Career'}</button>
       </div>` : ''}
       <div class="flex items-center gap-1 mb-8 overflow-x-auto pb-1">
         ${steps.map((s,i)=>`
@@ -371,7 +385,12 @@ async function loadAllSaves() {
         </div>
       </div>`);
     });
-    if (!items.length) { wrap.style.display = 'none'; return; }
+    if (!items.length) {
+      // Keep the card visible so the Import button is always reachable.
+      wrap.style.display = '';
+      list.innerHTML = '<p class="text-xs text-faint">' + (S.season?.lang === 'zh' ? '还没有存档。可点击右上角"导入存档"载入一个生涯文件。' : 'No saved careers yet. Use "Import" above to load a career file.') + '</p>';
+      return;
+    }
     wrap.style.display = '';
     list.innerHTML = items.join('');
   } catch(e) { console.warn('loadAllSaves', e); }
@@ -384,6 +403,47 @@ async function resumePlayer(playerId) {
   await refreshPlayer();
   toast('Welcome back!','success');
   switchTab('dashboard');
+}
+
+// Language selection on the initial screen (no player yet) — persisted to
+// localStorage and applied immediately to the tabs/create wizard.
+function setGlobalLang(lang) {
+  localStorage.setItem('bball_lang', lang);
+  if (!S.season) S.season = {};
+  S.season.lang = lang;
+  renderTabs();
+  renderCreate($('#main'));
+  toast(lang === 'zh' ? '已切换为中文' : 'Language set to English', 'success');
+}
+
+// Import a career JSON file (exported via Download Career JSON) as a new player.
+async function importCareerFile() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    const btn = $('#import-career-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.player && data.snapshot) data = data.snapshot; // accept the full export too
+      const res = await api('/career/import', { method:'POST', body: JSON.stringify(data) });
+      S.playerId = res.player_id; localStorage.setItem('bball_pid', res.player_id);
+      S.player = null; S.create._step = 1;
+      await refreshSeason();
+      await refreshPlayer();
+      toast(`Imported: ${res.name}`, 'success');
+      switchTab('dashboard');
+    } catch(e) {
+      toast('Import failed: ' + e.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '📤 Import'; }
+    }
+  };
+  input.click();
 }
 
 async function loadSaveFromInit(saveId) {
@@ -1421,7 +1481,8 @@ function renderDraftNight(m) {
         pathLabel: S.create.pathLabel || '',
         journeyEntries,
         combineSwing: S.create.combineSwing || 0,
-        workoutTeams: S.create.workoutTeams || []
+        workoutTeams: S.create.workoutTeams || [],
+        lang: S.season?.lang || localStorage.getItem('bball_lang') || 'en'
       })});
       S.playerId = res.player_id; S.player = res.player; localStorage.setItem('bball_pid', res.player_id);
       await refreshSeason();

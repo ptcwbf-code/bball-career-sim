@@ -4777,7 +4777,101 @@ function exportCareerJson(playerId) {
   const media = db.prepare('SELECT * FROM media_events WHERE player_id=? ORDER BY created_at DESC LIMIT 50').all(playerId);
   career.game_logs = games;
   career.media_events = media;
+  // Portable snapshot — this is what makes an export re-importable on any server.
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
+  const state = getLeagueState(playerId);
+  const tables = snapshotPlayerTables(playerId);
+  const saves = db.prepare('SELECT id,player_id,save_name,season_number,description,created_at FROM save_files WHERE player_id=?').all(playerId);
+  career.snapshot = { player: p, league: state, tables, save_files: saves };
   return career;
+}
+
+// Import a portable career snapshot as a NEW player (fresh id). Every related
+// table is re-parented to the new id so the file can be loaded on any server.
+// AUTOINCREMENT ids are reassigned (they're per-career, not stable), and the
+// relationships → life_events link is remapped to the fresh ids.
+function importCareerJson(payload) {
+  if (!payload || typeof payload !== 'object' || !payload.player) throw httpError(400, 'Invalid career file — missing player data.');
+  const src = payload.player;
+  const lg = payload.league || {};
+  if (!src.name) throw httpError(400, 'Invalid career file — player missing name.');
+  const newId = crypto.randomBytes(4).toString('hex');
+
+  db.exec('BEGIN');
+  try {
+    // Re-parent the player row, keeping only columns this DB actually has.
+    const validCols = new Set(db.prepare('PRAGMA table_info(players)').all().map(r => r.name));
+    const cols = Object.keys(src).filter(c => c !== 'id' && validCols.has(c));
+    db.prepare(`INSERT INTO players (id,${cols.join(',')}) VALUES (?,${cols.map(() => '?').join(',')})`)
+      .run(newId, ...cols.map(c => src[c]));
+
+    // league_state (per-player singleton).
+    db.prepare(`INSERT INTO league_state (player_id,current_season,current_phase,games_played_in_season,playoff_round,series_wins,series_losses,playoff_opponent,player_seed,opponent_seed,market,intl_tournament,game_mode,lang)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(player_id) DO NOTHING`)
+      .run(newId, lg.current_season ?? 1, lg.current_phase ?? 'regular_season', lg.games_played_in_season ?? 0,
+           lg.playoff_round ?? 0, lg.series_wins ?? 0, lg.series_losses ?? 0, lg.playoff_opponent ?? 0,
+           lg.player_seed ?? 0, lg.opponent_seed ?? 0, lg.market ?? 0, lg.intl_tournament ?? null,
+           lg.game_mode ?? 'classic', lg.lang ?? 'en');
+
+    const tables = payload.tables || {};
+    // Remap old relationship ids → fresh ids so life_events stay linked.
+    const relIdMap = {};
+    for (const r of (tables.relationships || [])) {
+      const oldId = r.id;
+      const colsFor = Object.keys(r).filter(c => c !== 'id');
+      const stmt = db.prepare(`INSERT INTO relationships (${colsFor.join(',')}) VALUES (${colsFor.map(() => '?').join(',')})`);
+      const res = stmt.run(...colsFor.map(c => (c === 'player_id' ? newId : r[c])));
+      relIdMap[oldId] = Number(res.lastInsertRowid);
+    }
+
+    // All other per-player tables get fresh autoincrement ids.
+    const idStripTables = ['game_logs', 'season_summaries', 'contracts', 'contract_offers', 'endorsements',
+                           'investments', 'media_events', 'career_progress', 'awards', 'ai_players', 'teammates', 'shoes'];
+    for (const t of idStripTables) {
+      db.prepare(`DELETE FROM ${t} WHERE player_id=?`).run(newId);
+      const rows = tables[t] || [];
+      if (!rows.length) continue;
+      const colsFor = Object.keys(rows[0]).filter(c => c !== 'id');
+      const stmt = db.prepare(`INSERT INTO ${t} (${colsFor.join(',')}) VALUES (${colsFor.map(() => '?').join(',')})`);
+      for (const r of rows) stmt.run(...colsFor.map(c => (c === 'player_id' ? newId : r[c])));
+    }
+
+    // life_events — remap relationship_id through relIdMap.
+    db.prepare('DELETE FROM life_events WHERE player_id=?').run(newId);
+    for (const r of tables.life_events || []) {
+      const colsFor = Object.keys(r).filter(c => c !== 'id');
+      const stmt = db.prepare(`INSERT INTO life_events (${colsFor.join(',')}) VALUES (${colsFor.map(() => '?').join(',')})`);
+      stmt.run(...colsFor.map(c => (c === 'player_id' ? newId : (c === 'relationship_id' && r[c] != null ? (relIdMap[r[c]] ?? null) : r[c]))));
+    }
+
+    // team_records (composite PK, no autoincrement id).
+    db.prepare('DELETE FROM team_records WHERE player_id=?').run(newId);
+    const tr = tables.team_records || [];
+    if (tr.length) {
+      const colsFor = Object.keys(tr[0]);
+      const hasPid = colsFor.includes('player_id');
+      const insertCols = hasPid ? colsFor : ['player_id', ...colsFor];
+      const stmt = db.prepare(`INSERT INTO team_records (${insertCols.join(',')}) VALUES (${insertCols.map(() => '?').join(',')})`);
+      for (const r of tr) stmt.run(...insertCols.map(c => (c === 'player_id' ? newId : r[c])));
+    }
+
+    // Re-import save_files (fresh ids, re-parented).
+    const sfCols = db.prepare('PRAGMA table_info(save_files)').all().map(r => r.name);
+    for (const s of payload.save_files || []) {
+      const fcols = Object.keys(s).filter(c => c !== 'id' && c !== 'snapshot' && sfCols.includes(c));
+      if (!fcols.includes('player_id')) fcols.push('player_id');
+      const sid = crypto.randomBytes(4).toString('hex');
+      db.prepare(`INSERT INTO save_files (id,${fcols.join(',')}) VALUES (?,${fcols.map(() => '?').join(',')})`)
+        .run(sid, ...fcols.map(c => (c === 'player_id' ? newId : s[c])));
+    }
+
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return { player_id: newId, name: src.name };
 }
 
 // ------------------------------------------------------------
@@ -4805,7 +4899,7 @@ function sanitizePlayer(p) {
 // Express app + routes
 // ------------------------------------------------------------
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 function wrap(fn) {
   return (req, res) => {
@@ -4824,7 +4918,7 @@ function wrap(fn) {
 // Player
 app.post('/api/player/create', wrap((req) => {
   const { name, position, age = 19, height, weight, allocations, luck_bonus, background, nationality = 'USA',
-          youthEffects, exposure = 0, pathLabel = '', journeyEntries = [], combineSwing = 0, workoutTeams = [] } = req.body || {};
+          youthEffects, exposure = 0, pathLabel = '', journeyEntries = [], combineSwing = 0, workoutTeams = [], lang = 'en' } = req.body || {};
   if (!POSITION_PROFILES[position]) throw httpError(400, 'Invalid position');
   if (!(age >= 19 && age <= 23)) throw httpError(400, `Age must be 19-23, got ${age}`);
   const profile = POSITION_PROFILES[position];
@@ -4843,6 +4937,7 @@ app.post('/api/player/create', wrap((req) => {
       .run(pid, season, 'origin', entry);
   }
   const player = db.prepare('SELECT * FROM players WHERE id=?').get(pid);
+  db.prepare('UPDATE league_state SET lang=? WHERE player_id=?').run(lang === 'zh' ? 'zh' : 'en', pid);
   return { player_id: pid, player: sanitizePlayer(player), pool_info: poolInfo, exposure, combineSwing, workoutTeams };
 }));
 
@@ -5383,6 +5478,7 @@ app.post('/api/clout/request-buyout/:id', wrap((req) => requestBuyout(req.params
 // Career
 app.get('/api/career/:id', wrap((req) => getCareerOverview(req.params.id)));
 app.get('/api/career/export/:id', wrap((req) => exportCareerJson(req.params.id)));
+app.post('/api/career/import', wrap((req) => importCareerJson(req.body || {})));
 
 // Save / load
 app.post('/api/save/:id', wrap((req) => saveGame(req.params.id, req.query.save_name, req.query.description || '')));
@@ -5631,7 +5727,7 @@ module.exports = {
   simulateGame, simulatePlayoffGame, generateSeasonSchedule, applyTraining, finalizeSeason, applyAging,
   getLeagueState, advanceLeaguePhase, advanceLeague, maybeDevelop, maybeCareerEvent,
   advanceYear, generateContractOffers, signContract, requestBuyout, maybeRetire, resolveRetirement,
-  buildDraftOrder, playerTier, teamTier, consistencyRating, deleteSave, app,
+  buildDraftOrder, playerTier, teamTier, consistencyRating, deleteSave, app, exportCareerJson, importCareerJson,
   seasonAdvancedStats, hollingerUPER, bracketOpponentSeed, playoffOpponentTeam, getConferenceStandings, conferenceSeeds,
   applyInjuryTreatment, maybeAllStar, allStarQualifies, signEndorsement, negotiateEndorsement,
   makeInvestment, redeemInvestment, maxSalaryFor, getRandomMediaScenario, teamDrift, hashSalt,
