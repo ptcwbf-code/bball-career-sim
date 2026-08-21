@@ -1342,6 +1342,10 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
     qT[0], qO[0], qT[1], qO[1], qT[2], qO[2], qT[3], qO[3],
     teamBox.reb, teamBox.ast, teamBox.tov, teamBox.fgm, teamBox.fga, teamBox.tpm, teamBox.tpa,
     oppBox.reb, oppBox.ast, oppBox.tov, oppBox.fgm, oppBox.fga, oppBox.tpm, oppBox.tpa];
+  // Query the previous career-high BEFORE inserting this game's log — otherwise
+  // prevHigh includes the current game and the personal-record check can never fire.
+  const prevHigh = db.prepare('SELECT MAX(pts) pts FROM game_logs WHERE player_id=? AND NOT (season_number=? AND game_number=?)').get(playerId, state.current_season, gameNumber)?.pts || 0;
+
   db.prepare(`INSERT INTO game_logs (${gcols.join(',')}) VALUES (${gcols.map(() => '?').join(',')})`).run(...gvals);
 
   // Accumulate the box score into the right bucket: regular season (s_*) or playoffs (p_*).
@@ -1390,7 +1394,6 @@ function simulateGame(playerId, opponentTeamId = null, isPlayoff = false, isHome
 
   // Personal best + franchise record — "reachable" milestones that fire often
   // and give small, frequent moments of progress (unlike the legend records).
-  const prevHigh = db.prepare('SELECT MAX(pts) pts FROM game_logs WHERE player_id=?').get(playerId)?.pts || 0;
   const personalRecord = box.pts > prevHigh && box.pts >= 20;
   if (personalRecord) {
     db.prepare('UPDATE players SET clout=MIN(100,clout+1) WHERE id=?').run(playerId);
@@ -2225,10 +2228,12 @@ function maybeCareerEvent(playerId) {
   const mode = getLeagueState(playerId).game_mode || 'classic';
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   const flags = new Set(JSON.parse(p.flags || '[]'));
-  // Cooldown: no events within 4 games of the last one, then increasing probability
+  // Cooldown: no events within a few games of the last one, then increasing probability.
+  // Story mode has a shorter cooldown and a higher ceiling for a denser narrative.
+  const cooldown = mode === 'story' ? 2 : 4;
   const gamesSinceLast = (p.s_games || 0) - (p.last_career_event_game || 0);
-  if (gamesSinceLast < 4) return null;
-  let baseChance = mode === 'story' ? 0.08 : 0.04;
+  if (gamesSinceLast < cooldown) return null;
+  let baseChance = mode === 'story' ? 0.09 : mode === 'sandbox' ? 0.03 : 0.04;
   // Ramp up chance the longer since last event (more "random" feeling)
   if (gamesSinceLast > 8) baseChance += 0.03;
   if (gamesSinceLast > 15) baseChance += 0.04;
@@ -2244,6 +2249,22 @@ function maybeCareerEvent(playerId) {
   if (!candidates.length) return null;
   const ev = candidates.find(e => e.id === weightedChoice(Object.fromEntries(candidates.map(e => [e.id, e.weight || 1]))));
   if (!ev) return null;
+
+  // Early-career origin story: occasionally reference the pre-NBA journey so the
+  // non-NBA leagues stay alive in the narrative ("former CBA star finding his feet").
+  const isEarly = (p.experience || 0) <= 1;
+  const originLines = isEarly ? db.prepare("SELECT description FROM career_progress WHERE player_id=? AND event_type='origin' AND description LIKE '%Pre-draft in%'").all(playerId) : [];
+  if (originLines.length && Math.random() < 0.35) {
+    const origin = choice(originLines).description;
+    return { type: 'event', event: {
+      id: 'origin_media', title: pick({ en: 'The Old Life', zh: '老日子' }, lang),
+      text: pick({
+        en: `Reporters keep bringing up your pre-NBA days. "${origin}" — they love the story of how you got here.`,
+        zh: `记者们总提起你进 NBA 之前的日子。"${origin}"——他们喜欢你一路走来的故事。`
+      }, lang), tone: 'positive',
+      changes: { fan_base: randInt(1, 4), clout: randInt(1, 3) }
+    } };
+  }
 
   const changes = {};
   for (const [k, range] of Object.entries(ev.effects || {})) {
@@ -2265,7 +2286,7 @@ function maybeCareerEvent(playerId) {
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
   const lang = getLeagueState(playerId).lang || 'en';
   db.prepare("INSERT INTO career_progress (player_id,season_number,event_type,description) VALUES (?,?,'event',?)")
-    .run(playerId, state.current_season, pick(ev.title, 'en') + ' — ' + pick(ev.text, 'en'));
+    .run(playerId, state.current_season, pick(ev.title, lang) + ' — ' + pick(ev.text, lang));
   // Track game number for cooldown
   db.prepare("UPDATE players SET last_career_event_game=? WHERE id=?").run(p.s_games || 0, playerId);
   return { type: 'event', event: { id: ev.id, title: pick(ev.title, lang), text: pick(ev.text, lang), tone: ev.tone, changes } };
@@ -2588,7 +2609,7 @@ function resetSeasonCounters(playerId) {
     s_pts=0,s_reb=0,s_ast=0,s_stl=0,s_blk=0,s_tov=0,s_fga=0,s_fgm=0,s_3pa=0,s_3pm=0,s_fga_mid=0,s_fta=0,s_ftm=0,s_games=0,s_min=0,s_pf=0,s_wins=0,s_losses=0,
     p_pts=0,p_reb=0,p_ast=0,p_stl=0,p_blk=0,p_tov=0,p_fga=0,p_fgm=0,p_3pa=0,p_3pm=0,p_fga_mid=0,p_fta=0,p_ftm=0,p_games=0,p_min=0,p_pf=0,p_wins=0,p_losses=0,
     hot_streak=0,cold_streak=0,injury_status=NULL,injury_games_remaining=0,injury_treatment=NULL,
-    fatigue=MAX(0,fatigue-45),injury_risk=0,mvp_votes=0,last_dev_game=0,locker_actions_used=0
+    fatigue=MAX(0,fatigue-45),injury_risk=0,mvp_votes=0,last_dev_game=0,locker_actions_used=0,last_career_event_game=0
     WHERE id=?`).run(playerId);
 }
 
@@ -3303,7 +3324,9 @@ function simulateFirstHalf(playerId, opponentTeamId, isPlayoff, isHome) {
   const roleUsage = { 'Ball-Dominant Creator': 0.33, 'Off-Ball Finisher': 0.21, 'Rim Protector': 0.14, 'Two-Way Wing': 0.25, '3-and-D Specialist': 0.17, 'Point Forward': 0.28, 'Stretch Big': 0.19, 'Defensive Anchor': 0.12 };
   let usageRate = roleUsage[player.role] ?? 0.24;
   usageRate *= clamp(0.5 + (overall - 40) / 70.0, 0.5, 1.3);
-  const courtPct = 0.85;
+  // The player is on court proportional to their minutes, not a flat 85%.
+  const mpg = (player.s_min || 0) / Math.max(1, player.s_games || 1);
+  const courtPct = clamp(mpg / 48 * 1.05, 0.45, 0.97);
   const box = { pts: 0, oreb: 0, dreb: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fga: 0, fgm: 0, tpa: 0, tpm: 0, fta: 0, ftm: 0, fga_mid: 0 };
   let teamScore = 0, oppScore = 0;
   const TOV_RATE = 0.12 * tactics.myTov;
@@ -3324,6 +3347,16 @@ function simulateFirstHalf(playerId, opponentTeamId, isPlayoff, isHome) {
         box.fgm += r.fgm; box.fga += r.fga; box.tpa += r.tpa; box.tpm += r.tpm;
         box.fta += r.fta; box.ftm += r.ftm; box.tov += r.tov;
         box.pts += r.points; box.ast += r.assist;
+        teamScore += r.points;
+        // Shot attempt without a make → rebounding chance
+        if (r.fga > r.fgm) {
+          if (Math.random() < 0.22) { box.oreb++; box.reb++; }
+          else if (Math.random() < 0.55) { box.dreb++; box.reb++; }
+        }
+      } else {
+        // Team possession without the player — points via a simple team model.
+        const teamPts = Math.random() < baseProb * 0.8 ? (Math.random() < 0.3 ? 3 : 2) : 0;
+        teamScore += teamPts;
       }
     } else {
       const defFactor = 1 + (teamDef - 110) / 220.0;
@@ -3637,8 +3670,13 @@ function playIntlTournament(playerId) {
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
   if (p.trained_season === state.current_season) throw httpError(400, "You've already used your offseason (training, tour, or international play).");
+  // FIBA youth success carries into the senior national team — a U19 gold medal
+  // means selection credibility and national-team cachet.
+  const youthEntry = db.prepare("SELECT description FROM career_progress WHERE player_id=? AND description LIKE '%FIBA%' ORDER BY id DESC LIMIT 1").get(playerId);
+  const youthMedal = youthEntry ? /(\w+) medal/.exec(youthEntry.description)?.[1] : null;
+  const youthBoost = youthMedal === 'gold' ? 0.12 : youthMedal === 'silver' ? 0.08 : youthMedal === 'bronze' ? 0.05 : 0;
   // Medal roll: gold is rare, a group exit is common.
-  const roll = Math.random();
+  const roll = Math.random() - youthBoost;
   let medal = 'group', fanGain = 2, cloutGain = 1;
   if (roll < 0.12) { medal = 'gold'; fanGain = randInt(10, 15); cloutGain = randInt(6, 10); }
   else if (roll < 0.32) { medal = 'silver'; fanGain = randInt(6, 9); cloutGain = randInt(4, 7); }
@@ -4009,7 +4047,7 @@ function handleNotableMedia(playerId, choiceIndex) {
   vals.push(playerId);
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
   db.prepare("INSERT INTO media_events (player_id,season_number,scenario_id,event_type,description,choice_made,narrative_result) VALUES (?,?,?,'interview',?,?,?)")
-    .run(playerId, getLeagueState(playerId).current_season, 'notable_' + notable.type, questionText, pick(choice.text, lang), pick(NARRATIVES[choice.tone], 'en'));
+    .run(playerId, getLeagueState(playerId).current_season, 'notable_' + notable.type, questionText, pick(choice.text, lang), pick(NARRATIVES[choice.tone], lang));
   return { question: questionText, choice: pick(choice.text, lang), narrative, tone: choice.tone };
 }
 
@@ -4039,7 +4077,7 @@ function handleMediaEvent(playerId, scenarioId, choiceIndex) {
   vals.push(playerId);
   db.prepare(`UPDATE players SET ${parts.join(', ')} WHERE id=?`).run(...vals);
   db.prepare("INSERT INTO media_events (player_id,season_number,scenario_id,event_type,description,choice_made,narrative_result) VALUES (?,?,?,'interview',?,?,?)")
-    .run(playerId, getLeagueState(playerId).current_season, scenarioId, pick(scenario.question, 'en'), pick(choice.text, 'en'), pick(NARRATIVES[choice.tone], 'en'));
+    .run(playerId, getLeagueState(playerId).current_season, scenarioId, pick(scenario.question, lang), pick(choice.text, lang), pick(NARRATIVES[choice.tone], lang));
   return { scenario: pick(scenario.question, lang), choice: pick(choice.text, lang), narrative, tone: choice.tone };
 }
 
@@ -4364,7 +4402,9 @@ function introAvailable(playerId, ev, season) {
   const existing = db.prepare("SELECT id FROM relationships WHERE player_id=? AND type=? AND status IN ('active','strained','married') LIMIT 1").get(playerId, ev.type);
   if (existing) return false;
   const last = db.prepare('SELECT season_number FROM life_events WHERE player_id=? AND event_id=? ORDER BY id DESC LIMIT 1').get(playerId, ev.id);
-  return !last || (season - (last.season_number || 0)) >= 3;
+  // Story mode brings new people into your life more often.
+  const cooldown = getLeagueState(playerId).game_mode === 'story' ? 1 : 3;
+  return !last || (season - (last.season_number || 0)) >= cooldown;
 }
 
 // Whether a relationship chain is waiting on the player's next choice — a
@@ -4436,6 +4476,7 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
   const p = db.prepare('SELECT * FROM players WHERE id=?').get(playerId);
   if (!p) throw httpError(404, 'Player not found');
   const season = getLeagueState(playerId).current_season;
+  const lang = getLeagueState(playerId).lang || 'en';
 
   let rel = relationshipId != null
     ? db.prepare('SELECT * FROM relationships WHERE id=? AND player_id=?').get(relationshipId, playerId)
@@ -4502,7 +4543,7 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
     let meta = {};
     try { meta = JSON.parse(rel.meta || '{}'); } catch {}
     if (!meta.shared) meta.shared = [];
-    const summary = pick(ch.text, 'en');
+    const summary = pick(ch.text, lang);
     if (summary && !meta.shared.includes(summary)) meta.shared.push(summary);
     if (meta.shared.length > 6) meta.shared = meta.shared.slice(-6); // keep last 6
     meta.last_event = ev.id;
@@ -4511,7 +4552,7 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
   }
 
   db.prepare('INSERT INTO life_events (player_id,season_number,event_id,relationship_id,description,choice_made) VALUES (?,?,?,?,?,?)')
-    .run(playerId, season, ev.id, rel ? rel.id : null, pick(ev.question, 'en'), pick(ch.text, 'en'));
+    .run(playerId, season, ev.id, rel ? rel.id : null, pick(ev.question, lang), pick(ch.text, lang));
 
   // Certain significant life events draw media attention — set a pending interview.
   const LIFE_MEDIA_TRIGGERS = {
@@ -4527,7 +4568,6 @@ function resolveLifeEvent(playerId, eventId, choiceIndex, relationshipId = null)
       .run(JSON.stringify({ type: 'life_media', question: mediaQ }), playerId);
   }
 
-  const lang = getLeagueState(playerId).lang || 'en';
   return {
     event: pick(ev.question, lang), choice: pick(ch.text, lang),
     relationship: rel ? { id: rel.id, name: rel.name, type: rel.type, bond: newBond, status: newStatus } : null,
@@ -5130,7 +5170,12 @@ app.get('/api/draft/class', wrap(() => ({ prospects: generateDraftClass().slice(
 app.post('/api/game/simulate/:id', wrap((req) => {
   const opponentId = req.query.opponent_id ? Number(req.query.opponent_id) : null;
   const isPlayoff = req.query.is_playoff === 'true';
-  return simulateGame(req.params.id, opponentId, isPlayoff);
+  const result = simulateGame(req.params.id, opponentId, isPlayoff);
+  // Story mode autosaves after every game so the narrative is never lost.
+  if (getLeagueState(req.params.id).game_mode === 'story' && !result.life_intro && !result.life_pending) {
+    try { saveGame(req.params.id, 'autosave', 'Auto-save (story mode)'); } catch(e) { /* autosave is best-effort */ }
+  }
+  return result;
 }));
 app.post('/api/game/simulate-batch/:id', wrap((req) => {
   const state = getLeagueState(req.params.id);
@@ -5228,6 +5273,45 @@ app.put('/api/player/:id/attribute', wrap((req) => {
   if (!Number.isFinite(value) || value < 10 || value > 99) throw httpError(400, 'Value must be 10-99.');
   db.prepare(`UPDATE players SET ${attr}=?, updated_at=datetime('now') WHERE id=?`).run(value, req.params.id);
   return { attr, value };
+}));
+// Sandbox god-view — expose the hidden formulas and current ratings so the player
+// can understand exactly why things happen the way they do.
+app.get('/api/sandbox/god-view/:id', wrap((req) => {
+  if ((getLeagueState(req.params.id).game_mode || 'classic') !== 'sandbox') throw httpError(400, 'God-view is only available in Sandbox mode.');
+  const p = db.prepare('SELECT * FROM players WHERE id=?').get(req.params.id);
+  if (!p) throw httpError(404, 'Player not found');
+  const overall = calculateOverallRating(p);
+  const state = getLeagueState(req.params.id);
+  const teamStr = teamStrength(req.params.id, p.team_id);
+  const teamOd = teamOffDef(req.params.id, p.team_id);
+  const lifeBuffs = lifeBondBuffs(req.params.id);
+  return {
+    player: {
+      overall,
+      potential: p.potential,
+      role: p.role,
+      chemistry: p.chemistry,
+      morale: p.morale,
+      fatigue: Math.round(p.fatigue),
+      hot_streak: p.hot_streak, cold_streak: p.cold_streak,
+      life_values: JSON.parse(p.life_values || '{}'),
+      flags: JSON.parse(p.flags || '[]'),
+    },
+    formulas: {
+      team_strength: `Top-8 active roster average OVR${p.team_id ? ' (includes you)' : ''} → ${teamStr}`,
+      team_off_def: `strength ${teamStr} → off ${teamOd.off} / def ${teamOd.def} (engine scale 88-132)`,
+      overall_rating: `Composite of all attributes → ${overall}`,
+      life_buffs: `Bond-driven composure ${lifeBuffs.composure} / clutch ${lifeBuffs.clutch} / morale ${lifeBuffs.morale}`,
+      morale_mod: `Morale swing = ±3% around 75 baseline`,
+      streak_cap: 'Hot/cold streak caps at ±10 effective shooting',
+    },
+    league: {
+      current_season: state.current_season,
+      phase: state.current_phase,
+      games_played: state.games_played_in_season,
+      game_mode: state.game_mode,
+    },
+  };
 }));
 app.get('/api/economy/assets', wrap(() => ({ assets: ASSET_TYPES })));
 app.post('/api/economy/invest/:id', wrap((req) => makeInvestment(req.params.id, req.query.asset_type || 'stocks', Number(req.query.amount))));
@@ -5352,16 +5436,27 @@ function simulateBracket(playerId) {
   const season = state.current_season;
   const playerTeamId = db.prepare('SELECT team_id FROM players WHERE id=?').get(playerId)?.team_id;
 
+  // Real playoff results the player already logged this season, grouped by opponent.
+  const realResults = {};
+  for (const g of db.prepare('SELECT opponent_team_id, result FROM game_logs WHERE player_id=? AND season_number=? AND is_playoff=1').all(playerId, season)) {
+    if (!realResults[g.opponent_team_id]) realResults[g.opponent_team_id] = { wins: 0, losses: 0 };
+    if (g.result === 'W') realResults[g.opponent_team_id].wins++; else realResults[g.opponent_team_id].losses++;
+  }
+
   function simSeries(teamA, teamB) {
     if (teamA === playerTeamId || teamB === playerTeamId) {
-      if (teamA === playerTeamId || teamB === playerTeamId) {
-        const isPlayerA = teamA === playerTeamId;
-        const opponent = isPlayerA ? teamB : teamA;
-        if (state.playoff_opponent === opponent) {
-          return { wins: state.series_wins, losses: state.series_losses, winner: state.series_wins >= 4 ? teamA : state.series_losses >= 4 ? teamB : null };
-        }
+      const isPlayerA = teamA === playerTeamId;
+      const opponent = isPlayerA ? teamB : teamA;
+      // A finished series against this opponent — use the REAL logged result.
+      const real = realResults[opponent];
+      if (real && (real.wins >= 4 || real.losses >= 4)) {
+        return { wins: real.wins, losses: real.losses, winner: real.wins >= 4 ? teamA : teamB };
       }
-      // Player's team but not current series — simulate by strength
+      // The live series in progress — use league_state (authoritative).
+      if (state.playoff_opponent === opponent) {
+        return { wins: state.series_wins, losses: state.series_losses, winner: state.series_wins >= 4 ? teamA : state.series_losses >= 4 ? teamB : null };
+      }
+      // Otherwise it's an unplayed future series — fall through to the prediction.
     }
     const a = teamStrength(playerId, teamA);
     const b = teamStrength(playerId, teamB);

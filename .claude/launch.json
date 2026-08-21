@@ -4,7 +4,7 @@
     {
       "name": "bball-sim",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["backend/server.js"],
+      "runtimeArgs": ["--experimental-sqlite", "backend/server.js"],
       "port": 3000
     }
   ]

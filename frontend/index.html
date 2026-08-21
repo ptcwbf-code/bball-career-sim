@@ -51,7 +51,25 @@ tailwind.config = {
 </nav>
 
 <!-- MAIN -->
-<main class="max-w-6xl mx-auto px-4 py-5" id="main"></main>
+<main class="max-w-6xl mx-auto px-4 py-5 pb-24 md:pb-5" id="main"></main>
+
+<!-- MOBILE BOTTOM NAV -->
+<nav id="mobile-nav" class="md:hidden fixed bottom-0 inset-x-0 z-40 bg-bg/95 backdrop-blur border-t border-bg-border" style="display:none">
+  <div class="flex items-stretch justify-around">
+    <button class="flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[10px]" data-mnav="dashboard">
+      <span class="text-lg leading-none">📊</span>Dashboard
+    </button>
+    <button class="flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[10px]" data-mnav="game">
+      <span class="text-lg leading-none">🏟️</span>Play
+    </button>
+    <button class="flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[10px]" data-mnav="career">
+      <span class="text-lg leading-none">🏆</span>Career
+    </button>
+    <button class="flex-1 py-2.5 flex flex-col items-center gap-0.5 text-[10px]" data-mnav="offcourt">
+      <span class="text-lg leading-none">💼</span>Off-Court
+    </button>
+  </div>
+</nav>
 
 <!-- TOAST -->
 <div class="toast space-y-2" id="toasts"></div>

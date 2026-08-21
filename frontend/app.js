@@ -60,6 +60,23 @@ function renderTabs() {
       ${tab.icon} ${lang==='zh'?(tab.zh||tab.label):tab.label}${tab.id==='offcourt' && S.mediaPending ? '<span class="ml-1 inline-block w-2 h-2 rounded-full bg-bad"></span>' : ''}
     </button>`).join('');
   $$('.tab', nav).forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+  syncMobileNav();
+}
+
+// Show/hide + highlight the mobile bottom nav.
+function syncMobileNav() {
+  const nav = $('#mobile-nav');
+  if (!nav) return;
+  nav.style.display = S.player ? '' : 'none';
+  $$('[data-mnav]', nav).forEach(b => {
+    const active = S.tab === b.dataset.mnav;
+    b.classList.toggle('text-accent', active);
+    b.classList.toggle('text-muted', !active);
+    b.classList.toggle('border-t-2', active);
+    b.classList.toggle('border-accent', active);
+    if (active) b.style.borderTop = '2px solid #f59e0b';
+    else b.style.borderTop = '2px solid transparent';
+  });
 }
 
 function switchTab(tab) {
@@ -156,6 +173,8 @@ async function boot() {
   if (S.playerId) {
     try { const d = await api(`/player/${S.playerId}`); S.player = d.player; } catch(e) { console.warn('player load failed', e); S.playerId=null; localStorage.removeItem('bball_pid'); }
   }
+  // Mobile bottom nav — switch tabs and highlight.
+  $$('#mobile-nav [data-mnav]').forEach(b => b.onclick = () => switchTab(b.dataset.mnav));
   await refreshSeason();
   renderTabs();
   renderHeader();
@@ -1363,12 +1382,23 @@ function getDraftProjection() {
 
 function renderDraftNight(m) {
   const pathNarrative = getPathNarrative();
+  const pre = S.create.preDraftStats || (S.create.journey?.layer3 ? generatePreDraftStats() : null);
   m.innerHTML = `
     <div class="card p-8 text-center" id="draft-panel">
       <div class="text-5xl mb-3">🎟️</div>
       <h2 class="text-2xl font-bold text-white mb-2">NBA Draft Night</h2>
       <p class="text-muted mb-2">${esc(S.create.name)}, the draft is about to begin.</p>
       ${pathNarrative ? `<p class="text-sm text-cyber mb-4 italic">"${esc(pathNarrative)}"</p>` : '<p class="text-muted mb-4">Your combine results and journey will determine where you land.</p>'}
+      ${pre ? `
+        <div class="bg-bg-hover border border-bg-border rounded-lg p-3 mb-4 inline-block text-left">
+          <p class="text-[10px] text-faint uppercase tracking-wider mb-1">${esc(pre.league)} · Scout Report</p>
+          <div class="flex gap-5">
+            <div class="text-center"><div class="mono text-xl font-bold text-accent">${pre.ppg}</div><div class="text-[10px] text-muted">PPG</div></div>
+            <div class="text-center"><div class="mono text-xl font-bold text-cyber">${pre.rpg}</div><div class="text-[10px] text-muted">RPG</div></div>
+            <div class="text-center"><div class="mono text-xl font-bold text-purple-400">${pre.apg}</div><div class="text-[10px] text-muted">APG</div></div>
+            <div class="text-center"><div class="mono text-xl font-bold text-white">${pre.pct}%</div><div class="text-[10px] text-muted">FG</div></div>
+          </div>
+        </div>` : ''}
       <div class="flex justify-center gap-3">
         <button class="btn-secondary" id="draft-back">← Back to Combine</button>
         <button class="btn-primary" id="draft-start">Enter the Draft</button>
@@ -1451,6 +1481,43 @@ function getPathNarrative() {
   return parts.join(', ') + ' — tonight, the dream becomes real.';
 }
 
+// Estimate a pre-NBA stat line from the predraft league + rough talent level,
+// so "where you came from" has real numbers behind it (like a scout report).
+function generatePreDraftStats() {
+  const paths = S.create._journeyPaths;
+  const nat = S.create.nationality || 'USA';
+  const predraft = S.create.journey?.layer3;
+  const rough = Object.entries(S.create.youthEffects || {}).reduce((s,[k,v])=>s+v, 0);
+  const talent = clamp(48 + rough / 3, 42, 80); // rough overall estimate
+
+  // League-specific scoring baselines (realistic for prospects).
+  const leagues = {
+    ncaa_d1:      { label: 'NCAA Division I',   base_ppg: 16, base_rpg: 6, base_apg: 3 },
+    ncaa_lower:   { label: 'NCAA D2/D3',        base_ppg: 22, base_rpg: 8, base_apg: 3 },
+    gleague:      { label: 'G-League Ignite',   base_ppg: 18, base_rpg: 6, base_apg: 3 },
+    ncaa_us:      { label: 'NCAA (USA)',        base_ppg: 15, base_rpg: 6, base_apg: 3 },
+    cba:          { label: 'CBA',               base_ppg: 19, base_rpg: 6, base_apg: 3 },
+    nbl:          { label: 'NBL (Australia)',   base_ppg: 16, base_rpg: 6, base_apg: 3 },
+    draft_direct: { label: 'Direct Entry',      base_ppg: 0,  base_rpg: 0, base_apg: 0 },
+    euroleague:   { label: 'EuroLeague',        base_ppg: 11, base_rpg: 5, base_apg: 3 },
+    domestic_first:{ label: 'Domestic League',  base_ppg: 17, base_rpg: 6, base_apg: 3 },
+    local_pro:    { label: 'Local Pro League',  base_ppg: 20, base_rpg: 7, base_apg: 3 },
+  };
+  const league = leagues[predraft] || { label: 'Pre-Draft League', base_ppg: 15, base_rpg: 6, base_apg: 3 };
+  if (!league.base_ppg) return null; // direct entry — no league stats
+
+  // Position shapes rebounds/assists.
+  const posAdj = { PG: { rpg: -1.5, apg: 3.5 }, SG: { rpg: -0.5, apg: 1 }, SF: { rpg: 0.5, apg: 0 },
+                   PF: { rpg: 2, apg: -1 }, C: { rpg: 3, apg: -1.5 } }[S.create.position] || { rpg: 0, apg: 0 };
+  // Talent edge over the league baseline.
+  const edge = (talent - 55) / 20;
+  const ppg = Math.max(4, Math.round(league.base_ppg + edge * 6 + (Math.random() * 2 - 1)));
+  const rpg = Math.max(1, Math.round(league.base_rpg + posAdj.rpg + edge * 2 + (Math.random() * 1.5 - 0.75)));
+  const apg = Math.max(0, Math.round(league.base_apg + posAdj.apg + edge * 1.5 + (Math.random() * 1 - 0.5)));
+  const pct = Math.round(clamp(0.42 + edge * 0.08 + (Math.random() * 0.03 - 0.015), 0.35, 0.55) * 100);
+  return { league: league.label, ppg, rpg, apg, pct, gp: randInt(24, 36) };
+}
+
 function buildJourneyEntries() {
   const entries = [];
   const nat = S.create.nationality || 'USA';
@@ -1465,6 +1532,12 @@ function buildJourneyEntries() {
         if (opt) entries.push(`${labels[key]} through: ${opt.label}.`);
       }
     }
+  }
+  // Pre-draft league stat line — real numbers for the scout report.
+  const preDraftStats = generatePreDraftStats();
+  if (preDraftStats && S.create.journey?.layer3) {
+    S.create.preDraftStats = preDraftStats;
+    entries.push(`Pre-draft in ${preDraftStats.league}: ${preDraftStats.ppg} PPG, ${preDraftStats.rpg} RPG, ${preDraftStats.apg} APG over ${preDraftStats.gp} games (${preDraftStats.pct}% FG).`);
   }
   if (S.create._fibaResult) {
     const r = S.create._fibaResult;
@@ -1781,6 +1854,7 @@ async function renderDashboard(m) {
           <span class="text-bg-border">|</span>
           <button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.lang||'en')==='en'?'!text-accent':''}" onclick="setLang('en')">EN</button>
           <button class="btn-ghost !py-1 !px-2.5 text-xs ${(S.season?.lang||'en')==='zh'?'!text-accent':''}" onclick="setLang('zh')">中文</button>
+          ${(S.season?.game_mode||'classic')==='sandbox' ? `<span class="text-bg-border">|</span><button class="btn-ghost !py-1 !px-2.5 text-xs text-cyber" onclick="openGodView()">🔬 God View</button>` : ''}
         </div>
       </div>
       <!-- Identity + Next action -->
@@ -2045,6 +2119,39 @@ async function setLang(lang) {
   switchTab('dashboard');
 }
 
+// Sandbox god-view — shows the hidden formulas and live ratings.
+async function openGodView() {
+  document.getElementById('godview-modal')?.remove();
+  try {
+    const g = await api(`/sandbox/god-view/${S.playerId}`);
+    const overlay = document.createElement('div');
+    overlay.id = 'godview-modal';
+    overlay.className = 'fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4';
+    const p = g.player;
+    const playerRows = Object.entries(p).map(([k,v]) => {
+      if (typeof v === 'object') v = JSON.stringify(v);
+      return `<div class="flex justify-between py-1 border-b border-bg-border/50 text-xs"><span class="text-muted">${k.replace(/_/g,' ')}</span><span class="text-white font-semibold">${v}</span></div>`;
+    }).join('');
+    const formulaRows = Object.entries(g.formulas).map(([k,v]) =>
+      `<div class="py-1.5 border-b border-bg-border/50 text-xs"><p class="text-cyber font-semibold">${k.replace(/_/g,' ')}</p><p class="text-muted mt-0.5">${v}</p></div>`
+    ).join('');
+    overlay.innerHTML = `<div class="card p-5 w-full max-w-md max-h-[80vh] flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-bold text-white">🔬 God View</h3>
+        <button class="text-muted text-xl" onclick="document.getElementById('godview-modal').remove()">×</button>
+      </div>
+      <div class="space-y-4 flex-1 overflow-y-auto">
+        <div><p class="text-xs font-semibold text-accent mb-1">Live Ratings</p>${playerRows}</div>
+        <div><p class="text-xs font-semibold text-accent mb-1">Hidden Formulas</p>${formulaRows}</div>
+        <div><p class="text-xs font-semibold text-accent mb-1">League</p>
+          <div class="text-xs text-muted">S${g.league.current_season} · ${g.league.phase} · ${g.league.games_played}/82 · ${g.league.game_mode} mode</div>
+        </div>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+  } catch(e) { toast('God-view failed: ' + e.message, 'error'); }
+}
+
 async function editAttr(attr) {
   const val = prompt(`Set ${attr.replace(/_/g,' ')} (10-99):`);
   if (val == null) return;
@@ -2124,18 +2231,19 @@ async function renderSeason(m) {
         <div class="overflow-x-auto">
           <table class="w-full text-xs">
             <thead><tr class="text-muted border-b border-bg-border text-left">
-              <th class="py-2 pr-2">#</th><th class="pr-2">Opp</th><th class="pr-2">W/L</th><th class="pr-2">MIN</th><th class="pr-2">PTS</th><th class="pr-2">REB</th><th class="pr-2">AST</th><th class="pr-2">STL</th><th class="pr-2">BLK</th><th class="pr-2">FG</th><th class="pr-2">3P</th><th class="pr-2" title="Team scoring margin, not on-court plus/minus">±</th>
+              <th class="py-2 pr-2">#</th><th class="pr-2">Opp</th><th class="pr-2">W/L</th><th class="hidden sm:table-cell pr-2">MIN</th><th class="pr-2">PTS</th><th class="pr-2">REB</th><th class="pr-2">AST</th><th class="hidden md:table-cell pr-2">STL</th><th class="hidden md:table-cell pr-2">BLK</th><th class="hidden lg:table-cell pr-2">FG</th><th class="hidden lg:table-cell pr-2">3P</th><th class="hidden lg:table-cell pr-2" title="Team scoring margin, not on-court plus/minus">±</th>
             </tr></thead>
             <tbody>${logs.games.map(g=>`
               <tr class="border-b border-bg-border hover:bg-bg-hover cursor-pointer" onclick="showGameDetailCached(${g.id})">
                 <td class="py-1.5 pr-2 text-faint">${g.game_number}</td>
                 <td class="pr-2">${S.teams?.[g.opponent_team_id]?.abbr||'T'+g.opponent_team_id}</td>
                 <td class="pr-2 font-bold ${g.result==='W'?'text-good':'text-bad'}">${g.result}</td>
-                <td class="pr-2 mono">${g.minutes}</td>
+                <td class="hidden sm:table-cell pr-2 mono">${g.minutes}</td>
                 <td class="pr-2 font-bold text-white">${g.pts}</td>
-                <td class="pr-2">${g.reb}</td><td class="pr-2">${g.ast}</td><td class="pr-2">${g.stl}</td><td class="pr-2">${g.blk}</td>
-                <td class="pr-2 text-muted">${g.fgm}/${g.fga}</td><td class="pr-2 text-muted">${g.tpm}/${g.tpa}</td>
-                <td class="mono ${g.plus_minus>0?'text-good':g.plus_minus<0?'text-bad':'text-muted'}">${g.plus_minus>0?'+':''}${g.plus_minus}</td>
+                <td class="pr-2">${g.reb}</td><td class="pr-2">${g.ast}</td>
+                <td class="hidden md:table-cell pr-2">${g.stl}</td><td class="hidden md:table-cell pr-2">${g.blk}</td>
+                <td class="hidden lg:table-cell pr-2 text-muted">${g.fgm}/${g.fga}</td><td class="hidden lg:table-cell pr-2 text-muted">${g.tpm}/${g.tpa}</td>
+                <td class="hidden lg:table-cell mono ${g.plus_minus>0?'text-good':g.plus_minus<0?'text-bad':'text-muted'}">${g.plus_minus>0?'+':''}${g.plus_minus}</td>
               </tr>`).join('')||`<tr><td colspan="12" class="py-4 text-center text-muted">No games yet</td></tr>`}</tbody>
           </table>
         </div>
@@ -2146,16 +2254,16 @@ async function renderSeason(m) {
         <h3 class="text-sm font-semibold text-gray-300 mb-3">${t('Season History')}</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs">
           <thead><tr class="text-muted border-b border-bg-border text-left">
-            <th class="py-2 pr-2">S</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="pr-2">SPG</th><th class="pr-2">BPG</th><th class="pr-2">PER</th><th class="pr-2">WS</th><th class="pr-2">Record</th><th class="pr-2">Playoffs</th><th>Awards</th>
+            <th class="py-2 pr-2">S</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="hidden md:table-cell pr-2">SPG</th><th class="hidden md:table-cell pr-2">BPG</th><th class="hidden md:table-cell pr-2">PER</th><th class="hidden lg:table-cell pr-2">WS</th><th class="hidden sm:table-cell pr-2">Record</th><th class="hidden lg:table-cell pr-2">Playoffs</th><th class="hidden lg:table-cell">Awards</th>
           </tr></thead>
           <tbody>${sums.seasons.map(su=>`
             <tr class="border-b border-bg-border hover:bg-bg-hover">
               <td class="py-1.5 pr-2 font-bold text-accent">${su.season_number}</td>
               <td class="pr-2 font-bold text-white">${su.ppg}</td><td class="pr-2">${su.rpg}</td><td class="pr-2">${su.apg}</td>
-              <td class="pr-2">${su.spg}</td><td class="pr-2">${su.bpg}</td>
-              <td class="pr-2 mono">${su.per}</td><td class="pr-2">${su.ws}</td>
-              <td class="pr-2">${su.team_wins}-${su.team_losses}</td><td class="pr-2 text-xs">${su.playoff_result||'—'}</td>
-              <td class="text-xs text-accent">${(JSON.parse(su.awards||'[]')).join(', ')||'—'}</td>
+              <td class="hidden md:table-cell pr-2">${su.spg}</td><td class="hidden md:table-cell pr-2">${su.bpg}</td>
+              <td class="hidden md:table-cell pr-2 mono">${su.per}</td><td class="hidden lg:table-cell pr-2">${su.ws}</td>
+              <td class="hidden sm:table-cell pr-2">${su.team_wins}-${su.team_losses}</td><td class="hidden lg:table-cell pr-2 text-xs">${su.playoff_result||'—'}</td>
+              <td class="hidden lg:table-cell text-xs text-accent">${(JSON.parse(su.awards||'[]')).join(', ')||'—'}</td>
             </tr>`).join('')}</tbody>
         </table></div>
       </div>`:''}
@@ -3357,12 +3465,10 @@ function gameResult(r) {
         <span class="text-2xl font-black ${r.result==='W'?'text-good':'text-bad'}">${r.result}</span>
       </div>
       <div class="text-center text-3xl font-black text-white mb-1">${r.team_score} – ${r.opponent_score}${r.overtime?`<span class="text-accent text-lg align-middle ml-2">(${r.overtime}OT)</span>`:''}</div>
-      <div class="flex justify-center gap-6 text-sm mb-2">
-        <span><b class="text-accent">${b.pts}</b> <span class="text-muted">PTS</span></span>
-        <span><b class="text-cyber">${b.reb}</b> <span class="text-muted">REB</span></span>
-        <span><b class="text-purple-400">${b.ast}</b> <span class="text-muted">AST</span></span>
-        <span><b class="text-good">${b.stl}</b> <span class="text-muted">STL</span></span>
-        <span><b class="text-bad">${b.blk}</b> <span class="text-muted">BLK</span></span>
+      <div class="flex justify-center gap-8 text-sm mb-2">
+        <span><b class="text-2xl text-accent">${b.pts}</b> <span class="text-xs text-muted">PTS</span></span>
+        <span><b class="text-2xl text-cyber">${b.reb}</b> <span class="text-xs text-muted">REB</span></span>
+        <span><b class="text-2xl text-purple-400">${b.ast}</b> <span class="text-xs text-muted">AST</span></span>
       </div>
       <p class="text-xs text-center text-faint italic mb-2">${highlight}</p>
       ${r.injury?`<div class="p-2 rounded bg-bad/10 border border-bad/30 text-bad text-xs mb-2">🏥 Injured: ${r.injury.type} — out ${r.injury.games} games</div>`:''}
@@ -3372,7 +3478,14 @@ function gameResult(r) {
 
       <!-- Expandable details -->
       <details class="mt-3">
-        <summary class="text-xs text-muted cursor-pointer hover:text-white mb-2">Show full box score, advanced stats & team comparison</summary>
+        <summary class="text-xs text-muted cursor-pointer hover:text-white mb-2">Show box score, advanced stats & team comparison</summary>
+        <div class="flex justify-center gap-6 mb-3 text-sm">
+          <span><b class="text-good">${b.stl}</b> <span class="text-muted">STL</span></span>
+          <span><b class="text-bad">${b.blk}</b> <span class="text-muted">BLK</span></span>
+          <span><b class="text-white">${b.tov}</b> <span class="text-muted">TOV</span></span>
+          <span><b class="text-white">${b.pf}</b> <span class="text-muted">PF</span></span>
+          <span><b class="text-white">${r.plus_minus>0?'+':''}${r.plus_minus}</b> <span class="text-muted">±</span></span>
+        </div>
         ${q.team?.length ? `
         <table class="w-full text-xs text-center mb-4 mt-2">
           <thead><tr class="text-muted border-b border-bg-border">
@@ -3448,15 +3561,16 @@ function showHalftimeModal() {
     ];
     const statsHtml = half ? `
       <div class="flex justify-center gap-8 mb-4 text-sm">
-        <div class="text-center"><div class="text-2xl font-black text-accent">${S.player.team_abbr||'YOU'}</div><div class="text-xs text-faint">est. ${half.team_score}</div></div>
+        <div class="text-center"><div class="text-2xl font-black text-accent">${S.player.team_abbr||'YOU'}</div><div class="text-xs text-faint">proj. ${half.team_score}</div></div>
         <span class="text-muted text-xl self-center">—</span>
-        <div class="text-center"><div class="text-2xl font-black text-white">OPP</div><div class="text-xs text-faint">est. ${half.opp_score}</div></div>
+        <div class="text-center"><div class="text-2xl font-black text-white">OPP</div><div class="text-xs text-faint">proj. ${half.opp_score}</div></div>
       </div>
-      <div class="flex justify-center gap-6 mb-4 text-xs text-muted">
+      <div class="flex justify-center gap-6 mb-1 text-xs text-muted">
         <span>PTS <b class="text-accent">${half.player_pts}</b></span>
-        <span>REB <b class="text-cyber">${half.player_reb}</b></span>
+        ${half.player_reb ? `<span>REB <b class="text-cyber">${half.player_reb}</b></span>` : ''}
         <span>AST <b class="text-purple-400">${half.player_ast}</b></span>
-      </div>` : '';
+      </div>
+      <p class="text-center text-[10px] text-faint mb-3">Coach's projection — the real first-half score may differ.</p>` : '';
     overlay.innerHTML = `<div class="card p-5 w-full max-w-md">
       <h3 class="text-lg font-bold text-white mb-1">🏀 Halftime</h3>
       <p class="text-xs text-muted mb-3">Your coach is asking: how should we adjust the second half?</p>
@@ -3720,15 +3834,15 @@ async function renderCareer(m) {
       </div>
       ${c.seasons?.length?`<div class="card p-5"><h3 class="text-sm font-semibold text-gray-300 mb-3">Season History</h3>
         <div class="overflow-x-auto"><table class="w-full text-xs"><thead><tr class="text-muted border-b border-bg-border text-left">
-          <th class="py-2 pr-2">S</th><th class="pr-2">Team</th><th class="pr-2">Age</th><th class="pr-2">G</th><th class="pr-2">MPG</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="pr-2">SPG</th><th class="pr-2">BPG</th><th class="pr-2">FG%</th><th class="pr-2">3P%</th><th class="pr-2">PER</th><th class="pr-2">WS</th><th class="pr-2">Playoffs</th><th>Awards</th>
+          <th class="py-2 pr-2">S</th><th class="pr-2">Team</th><th class="pr-2">Age</th><th class="hidden md:table-cell pr-2">G</th><th class="hidden lg:table-cell pr-2">MPG</th><th class="pr-2">PPG</th><th class="pr-2">RPG</th><th class="pr-2">APG</th><th class="hidden md:table-cell pr-2">SPG</th><th class="hidden md:table-cell pr-2">BPG</th><th class="hidden lg:table-cell pr-2">FG%</th><th class="hidden lg:table-cell pr-2">3P%</th><th class="hidden md:table-cell pr-2">PER</th><th class="hidden lg:table-cell pr-2">WS</th><th class="hidden sm:table-cell pr-2">Playoffs</th><th class="hidden lg:table-cell">Awards</th>
         </tr></thead><tbody>${c.seasons.map(su=>`<tr class="border-b border-bg-border hover:bg-bg-hover">
           <td class="py-1.5 pr-2 font-bold text-accent">${su.season_number}</td><td class="pr-2">${S.teams?.[su.team_id]?.abbr||'T'+su.team_id}</td>
-          <td class="pr-2">${su.age}</td><td class="pr-2">${su.games_played}</td><td class="pr-2">${su.mpg}</td>
+          <td class="pr-2">${su.age}</td><td class="hidden md:table-cell pr-2">${su.games_played}</td><td class="hidden lg:table-cell pr-2">${su.mpg}</td>
           <td class="pr-2 font-bold text-white">${su.ppg}</td><td class="pr-2">${su.rpg}</td><td class="pr-2">${su.apg}</td>
-          <td class="pr-2">${su.spg}</td><td class="pr-2">${su.bpg}</td>
-          <td class="pr-2 mono">${(su.fg_pct*100).toFixed(1)}</td><td class="pr-2 mono">${(su.tp_pct*100).toFixed(1)}</td>
-          <td class="pr-2 mono">${su.per}</td><td class="pr-2 mono">${su.ws}</td><td class="pr-2 text-xs">${su.playoff_result||'—'}</td>
-          <td class="text-xs text-accent">${(JSON.parse(su.awards||'[]')).join(', ')||'—'}</td></tr>`).join('')}</tbody></table></div></div>`:''}
+          <td class="hidden md:table-cell pr-2">${su.spg}</td><td class="hidden md:table-cell pr-2">${su.bpg}</td>
+          <td class="hidden lg:table-cell pr-2 mono">${(su.fg_pct*100).toFixed(1)}</td><td class="hidden lg:table-cell pr-2 mono">${(su.tp_pct*100).toFixed(1)}</td>
+          <td class="hidden md:table-cell pr-2 mono">${su.per}</td><td class="hidden lg:table-cell pr-2 mono">${su.ws}</td><td class="hidden sm:table-cell pr-2 text-xs">${su.playoff_result||'—'}</td>
+          <td class="hidden lg:table-cell text-xs text-accent">${(JSON.parse(su.awards||'[]')).join(', ')||'—'}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     </div>`;
   loadCareerEvents();
   loadRecords();
